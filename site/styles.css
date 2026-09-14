@@ -271,3 +271,56 @@ button.primary:not(:disabled):hover { filter: brightness(1.08); }
 .demo-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: center; }
 .demo-word { font-weight: 600; font-family: var(--mono); font-size: 0.95em; }
 .demo-chips { display: flex; flex-wrap: wrap; gap: 2px; }
+
+/* Chapter 2: embedding map */
+:root {
+  --g-drug: #d0453a; --g-anatomy: #c2247a; --g-symptom: #d97a00; --g-disease: #8a2fb5; --g-test: #1f6fc2;
+  --g-people: #2c8a4d; --g-place: #007f8c; --g-food: #a0562b; --g-everyday: #5561c9; --g-verb: #6c9a1f; --g-time: #6b7480;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --g-drug: #ff7b6e; --g-anatomy: #f26bb8; --g-symptom: #ffb04d; --g-disease: #c67cf0; --g-test: #6fb1ff;
+    --g-people: #62d48a; --g-place: #4fd0dc; --g-food: #d89468; --g-everyday: #9aa4ff; --g-verb: #b0d95a; --g-time: #a7b0ba;
+  }
+}
+.map-wrap { position: relative; }
+.map { display: block; width: 100%; max-width: 100%; height: auto; background: var(--bg); border-radius: var(--radius); }
+.pt circle { fill: var(--muted); stroke: var(--card); stroke-width: 1; opacity: 0.85; transition: r 200ms ease; cursor: default; }
+.pt:hover circle, .pt:focus circle { opacity: 1; stroke: var(--fg); stroke-width: 1.5; }
+.pt:focus { outline: none; }
+.pt:focus-visible circle { stroke: var(--accent); stroke-width: 2.5; }
+.pt.hit circle { opacity: 1; stroke: var(--fg); stroke-width: 1.5; transform-box: fill-box; transform-origin: center; animation: pulse 1.6s ease-in-out infinite; }
+.pt.hit.still circle { animation: none; }
+@keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.35); } }
+.pt-label { font: 600 13px var(--font); fill: var(--fg); paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
+[data-g="drug"] circle, li[data-g="drug"] .swatch { fill: var(--g-drug); background: var(--g-drug); }
+[data-g="anatomy"] circle, li[data-g="anatomy"] .swatch { fill: var(--g-anatomy); background: var(--g-anatomy); }
+[data-g="symptom"] circle, li[data-g="symptom"] .swatch { fill: var(--g-symptom); background: var(--g-symptom); }
+[data-g="disease"] circle, li[data-g="disease"] .swatch { fill: var(--g-disease); background: var(--g-disease); }
+[data-g="test"] circle, li[data-g="test"] .swatch { fill: var(--g-test); background: var(--g-test); }
+[data-g="people"] circle, li[data-g="people"] .swatch { fill: var(--g-people); background: var(--g-people); }
+[data-g="place"] circle, li[data-g="place"] .swatch { fill: var(--g-place); background: var(--g-place); }
+[data-g="food"] circle, li[data-g="food"] .swatch { fill: var(--g-food); background: var(--g-food); }
+[data-g="everyday"] circle, li[data-g="everyday"] .swatch { fill: var(--g-everyday); background: var(--g-everyday); }
+[data-g="verb"] circle, li[data-g="verb"] .swatch { fill: var(--g-verb); background: var(--g-verb); }
+[data-g="time"] circle, li[data-g="time"] .swatch { fill: var(--g-time); background: var(--g-time); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; list-style: none; margin: 10px 0 12px; padding: 0; font-size: 0.88rem; color: var(--muted); }
+.legend li { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.map-tip {
+  position: absolute;
+  z-index: 5;
+  min-width: 160px;
+  max-width: 220px;
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+  padding: 8px 10px;
+  font-size: 0.9rem;
+  pointer-events: none;
+}
+.tip-list { margin: 6px 0 0; padding-left: 1.3em; }
+.tip-list li { display: flex; justify-content: space-between; gap: 10px; }
+.tip-score { font-variant-numeric: tabular-nums; }
