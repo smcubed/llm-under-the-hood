@@ -1,10 +1,15 @@
-import { MODELS } from '../../site/models.js';
+import { MODELS, estimateCost } from '../../site/models.js';
 import { validateGenerate } from './validate.js';
 import { buildUpstream, normalizeUpstream } from './openrouter.js';
 import { issueSession, verifySession, sessionCookieHeader, readCookie, safeEqual } from './session.js';
 
 const json = (status, obj, headers = {}) => new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } });
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
+/** Seconds until the daily budgets reset (next UTC midnight). */
+export const secondsToUtcMidnight = (nowMs = Date.now()) => {
+  const d = new Date(nowMs);
+  return Math.max(1, Math.ceil((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) - nowMs) / 1000));
+};
 
 async function readJson(request) { try { return await request.json(); } catch { return null; } }
 
@@ -41,33 +46,73 @@ export async function handle(request, env, ctx) {
     const { model } = v.value;
     const budget = model.bucket === 'gpt4' ? num(env.GPT4_DAILY_BUDGET_USD, 1) : num(env.DAILY_BUDGET_USD, 5);
     if (!(await ledger.canSpend(model.bucket, budget))) {
-      return json(429, { message: model.bucket === 'gpt4' ? 'Today\'s class budget for GPT-4 is used up. Try a cheaper model or come back tomorrow.' : 'Today\'s class budget is used up. Please come back tomorrow.' });
+      return json(429, { message: model.bucket === 'gpt4' ? 'Today\'s class budget for GPT-4 is used up. Try a cheaper model or come back tomorrow.' : 'Today\'s class budget is used up. Please come back tomorrow.' }, { 'retry-after': String(secondsToUtcMidnight()) });
     }
+
+    // Reserve a conservative estimate before calling upstream, then reconcile against the real cost on `done`.
+    // If the client disconnects (or we crash) before `done`, the reservation stands as the charge.
+    const promptChars = v.value.prompt.length + v.value.system.length + v.value.prefix.length;
+    const reserved = estimateCost(model, Math.ceil(promptChars / 3), v.value.maxTokens);
+    await ledger.charge(model.bucket, reserved);
+    const refund = () => ctx.waitUntil(ledger.charge(model.bucket, -reserved));
     const { url: upUrl, body: upBody } = buildUpstream(v.value, env.OPENROUTER_BASE_URL);
     const doFetch = env.fetchUpstream || fetch;
     let up;
     try {
       up = await doFetch(upUrl, { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': url.origin, 'X-Title': env.SITE_TITLE || 'LLM Under the Hood' }, body: JSON.stringify(upBody) });
-    } catch { return json(502, { message: 'Could not reach the model provider. Try again in a moment.' }); }
-    if (!up.ok || !up.body) return json(502, { message: `The model provider returned an error (${up.status}). Try again or pick another model.` });
-
-    const events = normalizeUpstream(up.body, model);
-    const onDone = (ev) => { if (ev.type === 'done' && ev.cost > 0) ctx.waitUntil(ledger.charge(model.bucket, ev.cost)); };
-
-    if (!v.value.stream) {
-      const all = []; for await (const ev of events) { onDone(ev); all.push(ev); }
-      return json(200, { events: all });
+    } catch (err) {
+      refund();
+      console.error('generate: upstream fetch failed', err?.message || err);
+      return json(502, { message: 'Could not reach the model provider. Try again in a moment.' });
     }
+    if (!up.ok || !up.body) {
+      refund();
+      up.body?.cancel().catch(() => {});
+      console.error('generate: upstream returned', up.status);
+      const headers = {};
+      const retryAfter = up.headers.get('retry-after');
+      if (up.status === 429 && retryAfter) headers['retry-after'] = retryAfter;
+      return json(502, { message: `The model provider returned an error (${up.status}). Try again or pick another model.` }, headers);
+    }
+
+    const events = normalizeUpstream(up.body, model, { promptChars });
+    const reconcile = async (cost) => {
+      try { await ledger.charge(model.bucket, cost - reserved); }
+      catch (err) { console.error('generate: reconciling spend failed; reservation stands', err?.message || err); }
+    };
+
+    // Client-facing stream. cancel() only marks the client gone; the pump below keeps draining upstream
+    // (under ctx.waitUntil) so the `done` event, and therefore the real cost, is always reached.
     const enc = new TextEncoder();
-    const stream = new ReadableStream({
-      async pull(controller) {
-        const { value, done } = await events.next();
-        if (done) { controller.close(); return; }
-        onDone(value);
-        controller.enqueue(enc.encode(`data: ${JSON.stringify(value)}\n\n`));
-      },
+    let controller = null, clientGone = false;
+    const collected = v.value.stream ? null : [];
+    const readable = new ReadableStream({
+      start(c) { controller = c; },
+      cancel() { clientGone = true; controller = null; },
     });
-    return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' } });
+    const send = (ev) => {
+      if (collected) { collected.push(ev); return; }
+      if (clientGone || !controller) return;
+      try { controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`)); }
+      catch { clientGone = true; controller = null; }
+    };
+    const pump = (async () => {
+      try {
+        for await (const ev of events) {
+          if (ev.type === 'done') await reconcile(ev.cost);
+          send(ev);
+        }
+      } catch (err) {
+        console.error('generate: pump failed; reservation stands as the charge', err?.message || err);
+        send({ type: 'error', message: 'The connection to the model dropped.' });
+      } finally {
+        if (!clientGone && controller) { try { controller.close(); } catch { /* already closed */ } }
+      }
+    })();
+    ctx.waitUntil(pump);
+
+    if (collected) { await pump; return json(200, { events: collected }); }
+    return new Response(readable, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' } });
   }
 
   if (url.pathname.startsWith('/api/')) return json(404, { message: 'Not found.' });
