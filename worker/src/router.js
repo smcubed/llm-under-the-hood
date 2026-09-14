@@ -50,22 +50,23 @@ export async function handle(request, env, ctx) {
     const body = await readJson(request);
     const v = validateGenerate(body);
     if (!v.ok) return json(v.status, { message: v.message });
-    // Per-client limit (cookie) plus a per-IP limit so re-authenticating for a fresh client id does not reset the budget of requests.
-    const rl = await ledger.hit(sess.clientId, num(env.PER_CLIENT_PER_MINUTE, 30));
-    if (!rl.ok) return json(429, { message: 'You are sending requests quickly. Take a breath and try again in a moment.' }, { 'retry-after': String(rl.retryAfterSec) });
+    // Per-IP limit first (so an IP-limited request does not consume a client slot), then the per-client limit (cookie)
+    // so re-authenticating for a fresh client id does not reset the budget of requests.
     const ipl = await ledger.hit(`ip:${ip}`, num(env.PER_IP_PER_MINUTE, 60));
     if (!ipl.ok) return json(429, { message: 'Too many requests from this network right now. Try again in a moment.' }, { 'retry-after': String(ipl.retryAfterSec) });
+    const rl = await ledger.hit(sess.clientId, num(env.PER_CLIENT_PER_MINUTE, 30));
+    if (!rl.ok) return json(429, { message: 'You are sending requests quickly. Take a breath and try again in a moment.' }, { 'retry-after': String(rl.retryAfterSec) });
     const { model } = v.value;
     const budget = model.bucket === 'gpt4' ? num(env.GPT4_DAILY_BUDGET_USD, 1) : num(env.DAILY_BUDGET_USD, 5);
-    if (!(await ledger.canSpend(model.bucket, budget))) {
-      return json(429, { message: model.bucket === 'gpt4' ? 'Today\'s class budget for GPT-4 is used up. Try a cheaper model or come back tomorrow.' : 'Today\'s class budget is used up. Please come back tomorrow.' }, { 'retry-after': String(secondsToUtcMidnight()) });
-    }
 
     // Reserve a conservative estimate before calling upstream, then reconcile against the real cost on `done`.
+    // The budget check and the reservation are one ledger call, so two concurrent requests cannot both pass the check.
     // If the client disconnects (or we crash) before `done`, the reservation stands as the charge.
     const promptChars = v.value.prompt.length + v.value.system.length + v.value.prefix.length;
     const reserved = estimateCost(model, Math.ceil(promptChars / 3), v.value.maxTokens);
-    await ledger.charge(model.bucket, reserved);
+    if (!(await ledger.reserveIfUnder(model.bucket, reserved, budget))) {
+      return json(429, { message: model.bucket === 'gpt4' ? 'Today\'s class budget for GPT-4 is used up. Try a cheaper model or come back tomorrow.' : 'Today\'s class budget is used up. Please come back tomorrow.' }, { 'retry-after': String(secondsToUtcMidnight()) });
+    }
     const refund = () => ctx.waitUntil(ledger.charge(model.bucket, -reserved));
     const { url: upUrl, body: upBody } = buildUpstream(v.value, env.OPENROUTER_BASE_URL);
     const doFetch = env.fetchUpstream || fetch;
@@ -93,12 +94,13 @@ export async function handle(request, env, ctx) {
       catch (err) { console.error('generate: reconciling spend failed; reservation stands', err?.message || err); }
     };
 
-    // Client-facing stream. cancel() only marks the client gone; the pump below keeps draining upstream
-    // (under ctx.waitUntil) so the `done` event, and therefore the real cost, is always reached.
+    // Client-facing stream (only when the client asked to stream; otherwise events are collected and returned as JSON).
+    // cancel() only marks the client gone; the pump below keeps draining upstream (under ctx.waitUntil)
+    // so the `done` event, and therefore the real cost, is always reached.
     const enc = new TextEncoder();
     let controller = null, clientGone = false;
     const collected = v.value.stream ? null : [];
-    const readable = new ReadableStream({
+    const readable = collected ? null : new ReadableStream({
       start(c) { controller = c; },
       cancel() { clientGone = true; controller = null; },
     });

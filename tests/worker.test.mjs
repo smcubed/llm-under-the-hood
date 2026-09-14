@@ -11,7 +11,12 @@ function makeEnv(overrides = {}) {
   return {
     PASSCODE: 'test', COOKIE_SECRET: 'secret', OPENROUTER_API_KEY: 'k', OPENROUTER_BASE_URL: 'https://up/api/v1',
     DAILY_BUDGET_USD: '5', GPT4_DAILY_BUDGET_USD: '1', PER_CLIENT_PER_MINUTE: '30', AUTH_ATTEMPTS_PER_MINUTE: '10',
-    LEDGER: { getByName: () => ({ hit: async (c, l) => ledger.hit(c, l), canSpend: async (b, l) => ledger.canSpend(b, l), charge: async (b, u) => { charges.push([b, u]); ledger.charge(b, u); } }) },
+    // Fake DO stub over the pure Ledger. Deliberately exposes no canSpend: the router must reserve atomically.
+    LEDGER: { getByName: () => ({
+      hit: async (c, l) => ledger.hit(c, l),
+      reserveIfUnder: async (b, u, l) => { const ok = ledger.reserveIfUnder(b, u, l); if (ok) charges.push([b, u]); return ok; },
+      charge: async (b, u) => { charges.push([b, u]); ledger.charge(b, u); },
+    }) },
     ASSETS: { fetch: async () => new Response('asset', { status: 200 }) },
     fetchUpstream: async () => new Response(await readFile(new URL('./fixtures/chat_logprobs.sse', import.meta.url)), { status: 200, headers: { 'content-type': 'text/event-stream' } }),
     _ledger: ledger, _charges: charges, ...overrides,
@@ -115,8 +120,19 @@ test('daily budget exhausted → 429 naming the budget; gpt-4 has its own bucket
   assert.ok(ra >= 1 && ra <= 86_400, 'Retry-After is seconds until the next UTC midnight');
   const d = new Date(); const toMidnight = Math.ceil((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) - d.getTime()) / 1000);
   assert.ok(Math.abs(ra - toMidnight) <= 2);
+  assert.equal(env._charges.length, 0, 'a refused reservation charges nothing');
   const ok = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, { cookie: c }), env, ctx);
   assert.equal(ok.status, 200);
+});
+test('budget check and reservation are one atomic ledger call', async () => {
+  const env = makeEnv(); const calls = [];
+  const inner = env.LEDGER.getByName();
+  env.LEDGER = { getByName: () => new Proxy(inner, { get: (t, k) => { if (k === 'canSpend') return undefined; if (typeof t[k] === 'function') return (...a) => { calls.push(k); return t[k](...a); }; return t[k]; } }) };
+  const r = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, { cookie: await cookie(env) }), env, ctx);
+  assert.equal(r.status, 200); await r.text();
+  assert.equal(calls.filter(k => k === 'reserveIfUnder').length, 1);
+  assert.ok(!calls.includes('canSpend'));
+  assert.ok(Math.abs(net(env._charges) - FIXTURE_COST) < 1e-15, 'reservation + reconciliation still net to the real cost');
 });
 test('per-client rate limit → 429 with Retry-After', async () => {
   const env = makeEnv({ PER_CLIENT_PER_MINUTE: '1' }); const c = await cookie(env);
@@ -186,6 +202,16 @@ test('per-IP limit on /api/generate cannot be escaped by re-authenticating', asy
   assert.equal(r.status, 429); assert.ok(r.headers.get('retry-after'));
   const other = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, { cookie: await cookie(env), 'cf-connecting-ip': '8.8.8.8' }), env, ctx);
   assert.equal(other.status, 200, 'a different IP is unaffected');
+});
+test('an IP-limited request does not consume a per-client slot', async () => {
+  const env = makeEnv({ PER_IP_PER_MINUTE: '1', PER_CLIENT_PER_MINUTE: '1' });
+  const c = await cookie(env);
+  const fromA = (ck) => ({ cookie: ck, 'cf-connecting-ip': '5.5.5.5' });
+  assert.equal((await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, fromA(await cookie(env))), env, ctx)).status, 200, 'another client uses up IP A');
+  const blocked = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, fromA(c)), env, ctx);
+  assert.equal(blocked.status, 429); assert.match((await blocked.json()).message, /network/i);
+  const fromB = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, { cookie: c, 'cf-connecting-ip': '6.6.6.6' }), env, ctx);
+  assert.equal(fromB.status, 200, 'the IP-limited attempt did not spend the client\'s only slot');
 });
 test('per-IP limit defaults to 60 when the var is unset', async () => {
   const env = makeEnv({ PER_IP_PER_MINUTE: undefined, PER_CLIENT_PER_MINUTE: '100' });

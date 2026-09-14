@@ -36,3 +36,17 @@ test('snapshot/restore round-trips and prunes stale data', () => {
   assert.equal(l3.spent('default'), 0);
   assert.equal(Object.keys(l3.snapshot().minute).length, 0);
 });
+test('reserveIfUnder charges only while spend is under the limit, and reports which happened', () => {
+  let t = Date.UTC(2026, 8, 14, 12); const l = new Ledger(() => t);
+  assert.equal(l.reserveIfUnder('default', 0.6, 1), true);
+  assert.ok(Math.abs(l.spent('default') - 0.6) < 1e-12);
+  // Still under the limit, so the reservation goes through even though it will push spend over.
+  assert.equal(l.reserveIfUnder('default', 0.6, 1), true);
+  assert.ok(Math.abs(l.spent('default') - 1.2) < 1e-12);
+  // Now at/over the limit: nothing is charged.
+  assert.equal(l.reserveIfUnder('default', 0.1, 1), false);
+  assert.ok(Math.abs(l.spent('default') - 1.2) < 1e-12);
+  assert.equal(l.reserveIfUnder('gpt4', 0.1, 1), true, 'buckets are independent');
+  t = Date.UTC(2026, 8, 15, 0, 1);
+  assert.equal(l.reserveIfUnder('default', 0.1, 1), true, 'a new UTC day resets the bucket');
+});

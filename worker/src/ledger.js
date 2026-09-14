@@ -15,6 +15,12 @@ export class Ledger {
   }
   spent(bucket) { return this.spend[`${dayKey(this.now())}:${bucket}`] || 0; }
   canSpend(bucket, limitUsd) { return this.spent(bucket) < limitUsd; }
+  /** Atomically: if the bucket is under the limit, charge `usd` and return true; otherwise leave it untouched and return false. */
+  reserveIfUnder(bucket, usd, limitUsd) {
+    if (!this.canSpend(bucket, limitUsd)) return false;
+    this.charge(bucket, usd);
+    return true;
+  }
   charge(bucket, usd) {
     const k = `${dayKey(this.now())}:${bucket}`;
     this.spend[k] = (this.spend[k] || 0) + (Number(usd) || 0);
