@@ -17,6 +17,12 @@ test('buildUpstream: chat model → /chat/completions with messages, logprobs, u
   assert.equal(body.max_tokens, 50); assert.equal(body.temperature, 0.7); assert.equal(body.stream, true);
   assert.deepEqual(body.usage, { include: true });
 });
+test('buildUpstream: always asks upstream to stream, even when the client asked for stream:false', () => {
+  const v = { ...base, model: getModel('openai/gpt-4o-mini'), stream: false };
+  assert.equal(buildUpstream(v, 'x').body.stream, true);
+  const c = { ...base, model: getModel('openai/gpt-3.5-turbo-instruct'), stream: false };
+  assert.equal(buildUpstream(c, 'x').body.stream, true);
+});
 test('buildUpstream: system and prefix become system + partial assistant messages', () => {
   const v = { ...base, model: getModel('openai/gpt-4o-mini'), system: 'Be brief.', prefix: ' A CT' };
   const { body } = buildUpstream(v, 'x');
@@ -49,6 +55,11 @@ test('parseSSE ignores comment lines and handles CRLF', () => {
   assert.deepEqual(events, ['{"x":1}']);
 });
 
+test('parseSSE joins multiple data: lines in one block with newlines', () => {
+  const { events } = parseSSE('data: line one\ndata: line two\n\ndata: {"z":1}\n\n');
+  assert.deepEqual(events, ['line one\nline two', '{"z":1}']);
+});
+
 async function collect(fixture, modelId) {
   const text = await fx(fixture);
   const stream = new Response(text).body;
@@ -78,8 +89,82 @@ test('normalize completion with logprobs → top from object map, finish length'
   assert.deepEqual(ev[0].top, [{ text: ' chest', logprob: -0.3 }, { text: ' CT', logprob: -1.5 }, { text: ' a', logprob: -2.2 }]);
   assert.equal(ev.at(-1).finish, 'length');
 });
-test('normalize surfaces an upstream error object as an error event', async () => {
-  const stream = new Response('data: {"error":{"message":"Rate limited","code":429}}\n\n').body;
-  const out = []; for await (const e of normalizeUpstream(stream, getModel('openai/gpt-4o-mini'))) out.push(e);
-  assert.deepEqual(out, [{ type: 'error', message: 'Rate limited' }]);
+async function collectText(text, modelId, opts) {
+  const out = []; for await (const e of normalizeUpstream(new Response(text).body, getModel(modelId), opts)) out.push(e);
+  return out;
+}
+test('normalize maps an upstream error object to a fixed message keyed on code, never the raw text', async () => {
+  const errOf = async (code) => collectText(`data: {"error":{"message":"internal detail ${code}","code":${code}}}\n\n`, 'openai/gpt-4o-mini');
+  const busy = await errOf(429);
+  assert.equal(busy[0].type, 'error'); assert.equal(busy[0].message, 'The model is busy right now. Try again in a moment.');
+  assert.equal(busy.at(-1).type, 'done');
+  assert.equal((await errOf(402))[0].message, 'The model provider budget is exhausted.');
+  const other = await errOf(500);
+  assert.equal(other[0].message, 'The model returned an error. Try another model.');
+  assert.doesNotMatch(JSON.stringify(other), /internal detail/);
+});
+
+// I1: no usage block → estimate from what we saw; no [DONE] → finish 'truncated'
+test('normalize estimates usage when upstream omits it and marks a stream that ended without [DONE] as truncated', async () => {
+  const body = 'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: {"choices":[{"delta":{"content":" there"}}]}\n\n';
+  const ev = await collectText(body, 'anthropic/claude-haiku-4.5', { promptChars: 30 });
+  assert.equal(ev.length, 3);
+  const done = ev.at(-1);
+  assert.equal(done.type, 'done');
+  assert.deepEqual(done.usage, { prompt: 10, completion: 2 });
+  assert.ok(Math.abs(done.cost - (10 * 1 + 2 * 5) / 1e6) < 1e-15);
+  assert.equal(done.finish, 'truncated');
+});
+test('normalize keeps the upstream finish reason when [DONE] arrives', async () => {
+  const ev = await collect('chat_plain.sse', 'anthropic/claude-haiku-4.5');
+  assert.equal(ev.at(-1).finish, 'stop');
+});
+
+// I2: last block without a trailing blank line must still be processed
+test('normalize processes a trailing SSE block that lacks the final blank line', async () => {
+  const text = (await fx('chat_plain.sse')).replace(/\n\ndata: \[DONE\]\n\n$/, '');
+  assert.ok(!text.endsWith('\n\n'), 'fixture variant should end mid-block');
+  const ev = await collectText(text, 'anthropic/claude-haiku-4.5', { promptChars: 5 });
+  const done = ev.at(-1);
+  assert.deepEqual(done.usage, { prompt: 12, completion: 4 });
+  assert.equal(done.finish, 'stop');
+});
+
+// I3: upstream read error mid-stream → error event, then done with estimates
+test('normalize turns an upstream read failure into an error event followed by done', async () => {
+  const enc = new TextEncoder(); let pulls = 0;
+  const stream = new ReadableStream({
+    pull(c) {
+      pulls++;
+      if (pulls === 1) return c.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"A CT"}}]}\n\n'));
+      throw new Error('socket hang up');
+    },
+  });
+  const out = []; for await (const e of normalizeUpstream(stream, getModel('anthropic/claude-haiku-4.5'), { promptChars: 9 })) out.push(e);
+  assert.equal(out[0].type, 'token'); assert.equal(out[0].text, 'A CT');
+  assert.deepEqual(out[1], { type: 'error', message: 'The connection to the model dropped.' });
+  const done = out[2];
+  assert.equal(done.type, 'done'); assert.deepEqual(done.usage, { prompt: 3, completion: 1 }); assert.equal(done.finish, 'truncated');
+  assert.ok(Math.abs(done.cost - (3 * 1 + 1 * 5) / 1e6) < 1e-15);
+  assert.equal(out.length, 3);
+});
+
+// M7: chunk boundaries anywhere must not change the result
+test('normalize gives identical events when the fixture arrives one byte at a time', async () => {
+  const bytes = new TextEncoder().encode(await fx('chat_logprobs.sse'));
+  let i = 0;
+  const trickle = new ReadableStream({ pull(c) { if (i >= bytes.length) return c.close(); c.enqueue(bytes.slice(i, i + 1)); i++; } });
+  const slow = []; for await (const e of normalizeUpstream(trickle, getModel('openai/gpt-4o-mini'))) slow.push(e);
+  const fast = await collect('chat_logprobs.sse', 'openai/gpt-4o-mini');
+  assert.deepEqual(slow, fast);
+  assert.equal(slow.length, 3);
+});
+test('normalize cancels the upstream reader when the consumer stops iterating early', async () => {
+  const enc = new TextEncoder(); let cancelled = false;
+  const stream = new ReadableStream({
+    pull(c) { c.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"x"}}]}\n\n')); },
+    cancel() { cancelled = true; },
+  });
+  for await (const e of normalizeUpstream(stream, getModel('openai/gpt-4o-mini'))) { if (e.type === 'token') break; }
+  assert.equal(cancelled, true);
 });
