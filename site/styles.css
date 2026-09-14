@@ -324,3 +324,26 @@ button.primary:not(:disabled):hover { filter: brightness(1.08); }
 .tip-list { margin: 6px 0 0; padding-left: 1.3em; }
 .tip-list li { display: flex; justify-content: space-between; gap: 10px; }
 .tip-score { font-variant-numeric: tabular-nums; }
+
+/* Chapter 3: attention */
+.panel + .panel { margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--border); }
+.panel-title { font-size: 1.05rem; margin: 0 0 8px; }
+.tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.tab { appearance: none; background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; font-size: 0.92rem; cursor: pointer; color: var(--muted); }
+.tab[aria-selected="true"] { background: var(--accent); color: var(--accent-fg); border-color: transparent; font-weight: 600; }
+.arc-scroll { overflow-x: auto; overflow-y: hidden; margin: 0 -4px; padding: 0 4px; }
+.arc-stage { display: inline-block; min-width: 100%; vertical-align: top; }
+.arcs { display: block; width: 100%; height: 110px; overflow: visible; }
+.arc { fill: none; stroke: var(--accent); stroke-linecap: round; }
+.arc-to { stroke: var(--warn); }
+.arc-sketch { stroke: var(--muted); stroke-width: 1; opacity: 0.6; }
+.arc-row { display: flex; flex-wrap: nowrap; gap: 3px; white-space: nowrap; padding: 2px 0 4px; }
+.arc-row .chip { flex: 0 0 auto; margin: 0; }
+button.chip { border: 1px solid transparent; cursor: pointer; font: inherit; font-family: var(--mono); font-size: 0.95em; }
+.chip.is-from { border-color: var(--accent); }
+.chip.is-active { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chip.is-to { outline: 2px solid var(--warn); outline-offset: 1px; font-weight: 700; }
+.chip.is-seen { opacity: 0.75; }
+.show-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.small-btn { padding: 3px 10px; font-size: 0.88rem; font-family: var(--mono); }
+.small-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
