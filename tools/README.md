@@ -63,8 +63,8 @@ npx wrangler dev --port 8787 --var DAILY_BUDGET_USD:0.0000001
 
 Note: `GET /` 404s until `site/index.html` exists (Task 14); only `/api/*` is covered by this smoke.
 
-## Data builders (added in later tasks)
+## Data builders
 
-- `vendor_tokenizers.sh` — bundles `gpt-tokenizer` (o200k and cl100k) with esbuild into `site/vendor/`.
-- `build_embeddings.mjs` — embeds a word list with `Xenova/all-MiniLM-L6-v2` and writes `site/data/embeddings.json`.
-- `build_attention.py` — runs GPT-2 in the Python venv and writes per-head attention for the canned examples to `site/data/attention.json`.
+- `vendor_tokenizers.sh` — bundles `gpt-tokenizer` (o200k and cl100k) with esbuild into `site/vendor/` (`npm run vendor:tokenizers`; the two bundles are committed because the site has no build step).
+- `build_embeddings.mjs` — embeds `vocabulary.txt` (`word<TAB>group`, one per line) with `Xenova/all-MiniLM-L6-v2`, projects to 2-D with `pca.mjs`, and writes `site/data/embeddings.json` (`npm run data:embeddings`; the first run downloads the ~23 MB model into the transformers.js cache).
+- `build_attention.py` — runs GPT-2 in the Python venv and writes per-head attention for the canned examples to `site/data/attention.json`. One-time setup (a few hundred MB, `.venv/` is gitignored): `python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt`, then `npm run data:attention`. For each highlight it stores the (layer, head) where the `from` token attends most to the `to` token, that head's full attention row, and the layer's head-averaged row; a best weight under 0.15 is flagged `"weak": true`.
