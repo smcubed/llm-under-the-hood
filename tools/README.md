@@ -25,6 +25,44 @@ curl -N -X POST localhost:8788/chat/completions -H 'content-type: application/js
   -d '{"model":"openai/gpt-4o-mini","messages":[{"role":"user","content":"The patient presented with"}],"stream":true,"logprobs":true,"top_logprobs":5}'
 ```
 
+## Local smoke verified 2026-09-14
+
+`npm run mock` and `npm run dev` (wrangler 4.131.2, `.dev.vars` copied from `.dev.vars.example`) with these exact commands; no runtime fixes were needed (`env.LEDGER.getByName('global')`, the DO RPC methods, and the `cloudflare:workers` import all worked as written).
+
+```sh
+# wrong passcode → 401; right passcode → 204 with Set-Cookie: sess=...
+curl -i -X POST localhost:8787/api/auth -H 'content-type: application/json' -d '{"passcode":"nope"}'
+curl -i -X POST localhost:8787/api/auth -H 'content-type: application/json' -d '{"passcode":"test"}'
+COOKIE='sess=<value from Set-Cookie, up to the first ;>'
+
+# 204 with the cookie
+curl -i localhost:8787/api/session -H "cookie: $COOKIE"
+
+# chat model: 20 normalized token events then {"type":"done",...,"cost":0.00001305,"finish":"stop"}
+curl -N -X POST localhost:8787/api/generate -H 'content-type: application/json' -H "cookie: $COOKIE" \
+  -d '{"model":"openai/gpt-4o-mini","prompt":"The patient presented with"}'
+
+# legacy completions model: the mock logs "completion openai/gpt-3.5-turbo-instruct", same event shape, cost 0.0000505
+curl -N -X POST localhost:8787/api/generate -H 'content-type: application/json' -H "cookie: $COOKIE" \
+  -d '{"model":"openai/gpt-3.5-turbo-instruct","prompt":"The patient presented with"}'
+
+# stream:false → {"events":[...]} as JSON
+curl -X POST localhost:8787/api/generate -H 'content-type: application/json' -H "cookie: $COOKIE" \
+  -d '{"model":"openai/gpt-4o-mini","prompt":"hi","stream":false}'
+
+# 11 rapid wrong passcodes → 401s until the 10th hit in the minute, then 429 with Retry-After
+for i in $(seq 1 11); do curl -s -o /dev/null -w '%{http_code} ' -X POST localhost:8787/api/auth \
+  -H 'content-type: application/json' -d '{"passcode":"nope"}'; done
+
+# Durable Object round trip: after three generate calls, restart wrangler with a tiny budget.
+# The FIRST generate after the restart is a 429 "Today's class budget is used up." with Retry-After
+# (seconds to UTC midnight), which proves the spend persisted across the restart and that
+# reserveIfUnder refuses in the real DO; openai/gpt-4 (its own bucket) still returns 200.
+npx wrangler dev --port 8787 --var DAILY_BUDGET_USD:0.0000001
+```
+
+Note: `GET /` 404s until `site/index.html` exists (Task 14); only `/api/*` is covered by this smoke.
+
 ## Data builders (added in later tasks)
 
 - `vendor_tokenizers.sh` — bundles `gpt-tokenizer` (o200k and cl100k) with esbuild into `site/vendor/`.

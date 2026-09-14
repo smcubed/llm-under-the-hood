@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "lluth-dev", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 8787 },
+    { "name": "lluth-mock", "runtimeExecutable": "npm", "runtimeArgs": ["run", "mock"], "port": 8788 }
+  ]
+}
