@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "llm-under-the-hood",
+  "main": "worker/src/index.js",
+  "compatibility_date": "2026-09-01",
+  "assets": { "directory": "./site", "binding": "ASSETS" },
+  "durable_objects": {
+    "bindings": [{ "name": "LEDGER", "class_name": "LedgerObject" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LedgerObject"] }],
+  "vars": {
+    "DAILY_BUDGET_USD": "5",
+    "GPT4_DAILY_BUDGET_USD": "1",
+    "PER_CLIENT_PER_MINUTE": "30",
+    "AUTH_ATTEMPTS_PER_MINUTE": "10",
+    "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+    "SITE_TITLE": "LLM Under the Hood"
+  },
+  "observability": { "enabled": true }
+}

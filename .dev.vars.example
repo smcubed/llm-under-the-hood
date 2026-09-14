@@ -1,0 +1,4 @@
+OPENROUTER_API_KEY=mock
+OPENROUTER_BASE_URL=http://127.0.0.1:8788
+PASSCODE=test
+COOKIE_SECRET=dev-secret-change-me
