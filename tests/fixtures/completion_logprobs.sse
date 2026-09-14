@@ -1,0 +1,8 @@
+data: {"id":"cmpl-1","choices":[{"index":0,"text":" chest","logprobs":{"tokens":[" chest"],"token_logprobs":[-0.3],"top_logprobs":[{" chest":-0.3," CT":-1.5," a":-2.2}]},"finish_reason":null}]}
+
+data: {"id":"cmpl-1","choices":[{"index":0,"text":" pain","logprobs":{"tokens":[" pain"],"token_logprobs":[-0.05],"top_logprobs":[{" pain":-0.05," X":-3.9}]},"finish_reason":null}]}
+
+data: {"id":"cmpl-1","choices":[{"index":0,"text":"","logprobs":{"tokens":[],"token_logprobs":[],"top_logprobs":[]},"finish_reason":"length"}],"usage":{"prompt_tokens":6,"completion_tokens":2,"total_tokens":8}}
+
+data: [DONE]
+
