@@ -98,6 +98,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const MAX_BODY_CHARS = 1e6;
 const readBody = (req) => new Promise((resolve, reject) => {
   let s = '';
+  req.setEncoding('utf8'); // concatenate text, not Buffer.toString() per chunk, so a multi-byte char split across chunks survives
   req.on('data', c => { if (s.length < MAX_BODY_CHARS) s += c; });
   req.on('end', () => (s.length > MAX_BODY_CHARS ? reject(Object.assign(new Error('body too large'), { status: 413 })) : resolve(s)));
   req.on('error', reject);
@@ -112,7 +113,7 @@ export function createMock({ tokenMs = DEFAULT_TOKEN_MS, log = () => {} } = {}) 
     if (req.method !== 'POST' || !kind) return sendJson(res, 404, { error: { code: 404, message: `mock: no route for ${req.method} ${url.pathname}` } });
     const raw = await readBody(req); // rejects with status 413 when over MAX_BODY_CHARS; the outer catch answers
     let body;
-    try { body = JSON.parse(raw || '{}'); } catch { return sendJson(res, 400, { error: { code: 400, message: 'mock: body is not JSON' } }); }
+    try { body = JSON.parse(raw); } catch { return sendJson(res, 400, { error: { code: 400, message: 'mock: body is not JSON' } }); } // an empty body is not JSON either
     if (!isPlainObject(body)) return sendJson(res, 400, { error: { code: 400, message: 'mock: body must be a JSON object' } });
     log(`${kind} ${body.model} stream=${body.stream !== false} logprobs=${body.logprobs ?? 'no'} max_tokens=${body.max_tokens ?? 'default'}`);
     if (body.model === 'mock/error') return sendJson(res, 500, { error: { code: 500, message: 'mock: simulated provider failure' } });

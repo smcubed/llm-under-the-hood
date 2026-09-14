@@ -14,6 +14,8 @@ const vecs = out.tolist();
 const pts = pca2d(vecs);
 const norm = (arr, i) => { const v = arr.map(p => p[i]); const lo = Math.min(...v), hi = Math.max(...v); return v.map(x => ((x - lo) / (hi - lo)) * 2 - 1); };
 const xs = norm(pts, 0), ys = norm(pts, 1);
+const bad = words.filter((_, i) => !Number.isFinite(xs[i]) || !Number.isFinite(ys[i])).map(x => x.w);
+if (bad.length) throw new Error(`non-finite map coordinates for: ${bad.slice(0, 10).join(', ')}${bad.length > 10 ? ', ...' : ''} (a degenerate PCA axis or a constant column would do this)`);
 const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
 const neighbors = {};
 words.forEach((x, i) => {

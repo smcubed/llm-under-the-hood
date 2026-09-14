@@ -238,7 +238,11 @@ test('end to end: Worker streams normalized events from the mock for chat and co
       assert.equal(tokens[0].top.length, 5, `${modelId}: five alternatives on the first token`);
       const done = events.at(-1);
       assert.equal(done.type, 'done');
-      // The mock prices its usage from site/models.js; the Worker must report and charge exactly that.
+      // Coupled to the mock's pricing rule on purpose: tools/mock_openrouter.mjs sets usage.prompt_tokens to
+      // ceil(promptChars / 4), completion_tokens to the number of streamed tokens, and usage.cost to
+      // estimateCost(model, ...) from site/models.js. Recomputing it here (instead of trusting a cost read back from
+      // the stream) proves the Worker passed the upstream cost through untouched and charged exactly that amount.
+      // If the mock's formula changes, update this line with it.
       const expected = estimateCost(getModel(modelId), Math.ceil(prompt.length / 4), tokens.length);
       assert.ok(Math.abs(done.cost - expected) < 1e-15, `${modelId}: done.cost ${done.cost} vs mock ${expected}`);
       assert.ok(Math.abs(net(env._charges, getModel(modelId).bucket) - expected) < 1e-15, `${modelId}: net charges equal the mock's cost`);

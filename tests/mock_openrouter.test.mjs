@@ -117,15 +117,18 @@ test('model mock/error → 500; unknown route → 404', async () => {
 test('malformed bodies get an HTTP response and the server survives', async () => {
   await withMock(async (base) => {
     const raw = (body) => fetch(base + '/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
-    for (const body of ['', 'null', '5', '[]', '{"messages":"hi"}', '{"prompt":""}']) {
+    // Non-object JSON is refused; an object with odd field types is tolerated and still streams.
+    const expected = { '': 400, 'null': 400, '5': 400, '[]': 400, '{"messages":"hi"}': 200, '{"prompt":""}': 200 };
+    for (const [body, status] of Object.entries(expected)) {
       const res = await raw(body);
-      assert.ok(res.status === 400 || res.status === 200, `${JSON.stringify(body)} → ${res.status}`);
+      assert.equal(res.status, status, `${JSON.stringify(body)} → ${res.status}`);
       await res.text();
     }
     // Same bodies against the legacy route, including the empty-prompt one which must still produce tokens.
-    for (const body of ['null', '[]', '{"prompt":""}', '{"prompt":"","stream":false}']) {
+    const expectedLegacy = { 'null': 400, '[]': 400, '{"prompt":""}': 200, '{"prompt":"","stream":false}': 200 };
+    for (const [body, status] of Object.entries(expectedLegacy)) {
       const res = await fetch(base + '/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
-      assert.ok(res.status === 400 || res.status === 200, `${JSON.stringify(body)} → ${res.status}`);
+      assert.equal(res.status, status, `${JSON.stringify(body)} → ${res.status}`);
       await res.text();
     }
     const okAfter = await post(base, '/chat/completions', { model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }], stream: false });
