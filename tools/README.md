@@ -61,7 +61,7 @@ for i in $(seq 1 11); do curl -s -o /dev/null -w '%{http_code} ' -X POST localho
 npx wrangler dev --port 8787 --var DAILY_BUDGET_USD:0.0000001
 ```
 
-Note: `GET /` 404s until `site/index.html` exists (Task 14); only `/api/*` is covered by this smoke.
+Note: this smoke covers `/api/*`; `GET /` serves `site/index.html` (the passcode gate) and every file under `site/` is served as a static asset at the same path (for example `/vendor/o200k.js`, `/data/embeddings.json`).
 
 ## Data builders
 

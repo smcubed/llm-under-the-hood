@@ -1,4 +1,8 @@
 import { estimateCost } from '../../site/models.js';
+import { parseSSE } from '../../site/sse.js';
+
+// One copy of the SSE splitter serves both the Worker and the browser client (site/api.js).
+export { parseSSE };
 
 export function buildUpstream(v, baseUrl) {
   const m = v.model;
@@ -17,22 +21,6 @@ export function buildUpstream(v, baseUrl) {
   const body = { ...common, messages };
   if (m.logprobs && v.topLogprobs > 0) { body.logprobs = true; body.top_logprobs = v.topLogprobs; }
   return { url: `${baseUrl}/chat/completions`, body };
-}
-
-/** Split accumulated SSE text into complete `data:` payloads. */
-export function parseSSE(buffer) {
-  const events = [];
-  const normalized = buffer.replace(/\r\n/g, '\n');
-  const parts = normalized.split('\n\n');
-  const rest = parts.pop();
-  for (const block of parts) {
-    const data = [];
-    for (const line of block.split('\n')) {
-      if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
-    }
-    if (data.length) events.push(data.join('\n'));
-  }
-  return { events, rest };
 }
 
 function chatTokens(choice) {
