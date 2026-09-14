@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tokenize, loadTokenizer } from '../site/tokenize.js';
+import { tokenize, loadTokenizer, _resetTokenizerCache } from '../site/tokenize.js';
 
 test('o200k splits a clinical word into visible pieces with ids', async () => {
   const enc = await loadTokenizer('o200k');
@@ -8,8 +8,8 @@ test('o200k splits a clinical word into visible pieces with ids', async () => {
   assert.deepEqual(toks.map(t => t.text), ['The', ' patient', ' has', ' hy', 'pon', 'at', 'rem', 'ia', '.']);
   assert.ok(toks.every(t => Number.isInteger(t.id)));
 });
-// Runs before the plain cl100k test below on purpose: loadTokenizer caches by name, so this must be the first cl100k load.
 test('a failed load is not cached, so a later load of the same name succeeds', async () => {
+  _resetTokenizerCache();
   await assert.rejects(loadTokenizer('cl100k', { importer: async () => { throw new Error('network down'); } }), /network down/);
   const enc = await loadTokenizer('cl100k');
   assert.equal(typeof enc.encode, 'function');

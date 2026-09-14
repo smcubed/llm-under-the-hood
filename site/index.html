@@ -10,6 +10,7 @@
   <script type="module" src="app.js"></script>
 </head>
 <body>
+  <noscript><p class="notice">This page needs JavaScript. Everything here runs in your browser and talks to the model through our server.</p></noscript>
   <header class="strip" id="strip" hidden>
     <nav aria-label="Pipeline">
       <ol class="strip-list">
@@ -43,9 +44,9 @@
       <p class="notice"><strong>No patient information.</strong> Everything you type here goes to a commercial model provider. Use made-up cases only. The starter prompts are fictional.</p>
 
       <form id="prompt-form" novalidate>
-        <label for="prompt">Your prompt (up to 200 characters)</label>
-        <textarea id="prompt" name="prompt" rows="3" maxlength="200" placeholder="Type a sentence for the model to continue, or pick a starter below." autocomplete="off"></textarea>
-        <p class="counter" aria-live="polite"><span id="counter">0 / 200</span></p>
+        <label for="prompt">Your prompt (up to <span class="prompt-limit">200</span> characters)</label>
+        <textarea id="prompt" name="prompt" rows="3" maxlength="200" aria-describedby="counter" placeholder="Type a sentence for the model to continue, or pick a starter below." autocomplete="off"></textarea>
+        <p class="counter"><span id="counter">0 / <span class="prompt-limit">200</span></span></p>
 
         <div class="starters" role="group" aria-label="Starter prompts">
           <button type="button" class="starter">The patient presented with chest pain and</button>
@@ -69,7 +70,7 @@
 
     <section class="chapter" id="ch-tokens" aria-labelledby="h-tokens">
       <h2 id="h-tokens">1. Words become tokens</h2>
-      <p class="lede">The model never sees letters or words. It sees a list of numbered pieces called tokens. Common words are usually one token each. Rare words, and most clinical ones, splinter into several. Different models slice text differently.</p>
+      <p class="lede">The model never sees letters or words, only a list of numbered pieces called tokens. Common words are usually one token each. Rare words, and most clinical ones, splinter into several. Different models slice text differently.</p>
       <div class="viz"></div>
       <p class="try">Try this: type a long drug name and watch it splinter.</p>
     </section>
@@ -78,26 +79,26 @@
       <h2 id="h-numbers">2. Tokens become numbers</h2>
       <p class="lede">Each token is turned into a long list of numbers, called an embedding. Words that are used in similar ways end up near each other. This map shows about 300 everyday and clinical words, flattened from hundreds of dimensions down to two. Any of your tokens that are on the map light up.</p>
       <div class="viz"></div>
-      <p class="try">Try this: hover a word to see its nearest neighbours. Warfarin should land near heparin.</p>
+      <p class="try">Try this: hover a word to see its nearest neighbors. Warfarin should land near heparin.</p>
     </section>
 
     <section class="chapter" id="ch-attention" aria-labelledby="h-attention">
       <h2 id="h-attention">3. Every word looks at the others</h2>
-      <p class="lede">Attention lets each token look back at the tokens before it and decide which ones matter. In these two fixed sentences, the arcs show where a pronoun actually looks in a real model (GPT-2). For your own prompt we can only sketch the shape of the process; those lines are not real weights, and the caption says so.</p>
+      <p class="lede">Attention lets each token look back at the tokens before it and decide which ones matter. In these two fixed sentences, the arcs show where a pronoun actually looks in a real model (GPT-2). For your own prompt we can only sketch the shape of the process; those lines are not real weights.</p>
       <div class="viz"></div>
       <p class="try">Try this: find the arc from "it" back to "medication". Then check where "she" points in the second sentence.</p>
     </section>
 
     <section class="chapter" id="ch-predict" aria-labelledby="h-predict">
       <h2 id="h-predict">4. Pick the next word</h2>
-      <p class="lede">After all of that, the model does one thing: it scores every token in its vocabulary as a candidate for the next position and picks from the top. The bars are the real scores for your prompt. Temperature controls how often it picks something other than the favourite. The model sounds just as fluent when it is guessing, which is what a hallucination looks like from the inside.</p>
+      <p class="lede">After all of that, the model does one thing: it scores every token in its vocabulary as a candidate for the next position and picks from the top. The bars are the real scores for your prompt. Temperature controls how often it picks something other than the favorite. The model sounds just as fluent when it is guessing, which is what a hallucination looks like from the inside.</p>
       <div class="viz"></div>
       <p class="try">Try this: slide the temperature up, roll a few times, and watch the sentence change.</p>
     </section>
 
     <section class="chapter" id="ch-assistant" aria-labelledby="h-assistant">
       <h2 id="h-assistant">5. From autocomplete to assistant</h2>
-      <p class="lede">A raw language model continues your text. It does not answer you. The assistant behaviour comes from extra training and from a hidden instruction called a system prompt. The left pane is a 2022 completion model; the right is the model you picked. Change the system prompt and re-run to see how the framing shifts the answer.</p>
+      <p class="lede">A raw language model continues your text; it does not answer you. The assistant behavior comes from extra training and from a hidden instruction called a system prompt. The left pane is a 2022 completion model; the right is the model you picked. Change the system prompt and re-run to see how the framing shifts the answer.</p>
       <div class="viz"></div>
       <p class="try">Try this: ask a question in the prompt box and see which pane actually answers it.</p>
     </section>

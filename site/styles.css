@@ -126,12 +126,14 @@ a { color: var(--accent); }
   padding: 10px 14px;
   color: var(--fg);
 }
-label { display: block; font-weight: 600; margin: 0.8em 0 0.3em; }
+label { font-weight: 600; }
+.field > label, form > label { display: block; margin: 0.8em 0 0.3em; }
+.inline-label { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; cursor: pointer; }
 input, textarea, select, button {
   font: inherit;
   color: var(--fg);
 }
-input, textarea, select {
+input:not([type=checkbox]):not([type=radio]):not([type=range]), textarea, select {
   width: 100%;
   background: var(--card);
   border: 1px solid var(--border);
@@ -219,6 +221,33 @@ button.primary:not(:disabled):hover { filter: brightness(1.08); }
 .p-high { color: var(--p-high); }
 .p-mid { color: var(--p-mid); }
 .p-low { color: var(--p-low); }
+/* Confidence bands for output text: a tint behind the token plus a solid underline, text stays --fg. */
+.band-high, .band-mid, .band-low, .band-unknown { color: var(--fg); border-bottom: 2px solid transparent; border-radius: 3px 3px 0 0; }
+.band-high { background: color-mix(in srgb, var(--p-high) 30%, var(--card)); border-bottom-color: var(--p-high); }
+.band-mid { background: color-mix(in srgb, var(--p-mid) 30%, var(--card)); border-bottom-color: var(--p-mid); }
+.band-low { background: color-mix(in srgb, var(--p-low) 30%, var(--card)); border-bottom-color: var(--p-low); }
+.band-unknown { border-bottom-color: var(--border); }
+
+/* Inline notices inside a viz, with an optional Retry button */
+.notice-inline { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0; }
+
+/* Popover (chapter 4 forks, chapter 6 alternatives) */
+.popover {
+  position: absolute;
+  z-index: 20;
+  max-width: min(320px, calc(100vw - 16px));
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 10px 12px;
+  font-size: 0.95rem;
+}
+.popover:focus { outline: none; }
+
+/* Chip space marker */
+.chip .sp { color: var(--muted); opacity: 0.7; font-size: 0.85em; margin-right: 1px; }
 
 /* Footer */
 .site-footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.9rem; }

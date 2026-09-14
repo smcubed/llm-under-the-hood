@@ -35,3 +35,21 @@ test('a subscriber that throws does not stop the others', () => {
   store.set({ a: 2 });
   assert.deepEqual(seen, [2]);
 });
+test('update(fn) sets fn(get()) synchronously and notifies with the returned keys', () => {
+  const store = createStore({ n: 1, other: 'x' });
+  const calls = [];
+  store.subscribe((state, keys) => calls.push([state.n, keys]));
+  store.update((s) => ({ n: s.n + 1 }));
+  assert.equal(store.get().n, 2);
+  assert.deepEqual(calls, [[2, ['n']]]);
+});
+test('setResult(key, value) merges one chapter result without touching the others', () => {
+  const store = createStore({ results: { tokens: [1] } });
+  const calls = [];
+  store.subscribe((state, keys) => calls.push(keys));
+  store.setResult('predict', { usage: { prompt: 7 } });
+  assert.deepEqual(store.get().results, { tokens: [1], predict: { usage: { prompt: 7 } } });
+  assert.deepEqual(calls, [['results']]);
+  store.setResult('tokens', [2]);
+  assert.deepEqual(store.get().results, { tokens: [2], predict: { usage: { prompt: 7 } } });
+});

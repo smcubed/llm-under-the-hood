@@ -11,6 +11,9 @@ export async function loadTokenizer(name, { importer = defaultImporter } = {}) {
   return cache.get(name);
 }
 
+/** Tests only: forget every loaded or in-flight tokenizer so the next load goes through the importer again. */
+export function _resetTokenizerCache() { cache.clear(); }
+
 // Special-token markup such as "<|endoftext|>" is just text a student typed; encode it as ordinary bytes.
 const ENCODE_OPTIONS = { disallowedSpecial: new Set() };
 

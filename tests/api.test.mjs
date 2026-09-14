@@ -100,3 +100,23 @@ test('generate: an already-aborted signal rejects before fetching', async () => 
   await assert.rejects(generate({ model: 'm', prompt: 'p' }, { onEvent: () => {}, signal: ac.signal }), (err) => err.name === 'AbortError');
   assert.equal(calls.length, 0);
 });
+
+test('generate: when onEvent throws, the body is cancelled and the error propagates', async () => {
+  let cancelled = false;
+  const enc = new TextEncoder();
+  const body = new ReadableStream({
+    pull(c) { c.enqueue(enc.encode(sse(TOKEN))); return new Promise(r => setTimeout(r, 5)); },
+    cancel() { cancelled = true; },
+  });
+  stubFetch(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+  await assert.rejects(generate({ model: 'm', prompt: 'p' }, { onEvent: () => { throw new Error('renderer broke'); } }), /renderer broke/);
+  assert.ok(cancelled, 'the body reader was cancelled');
+});
+
+test('generate: an error event mid-stream is delivered, then the call rejects with fromStream once the stream ends', async () => {
+  const ERR = { type: 'error', message: 'The model provider is unavailable right now.' };
+  stubFetch(sseResponse(sse(TOKEN, ERR)));
+  const seen = [];
+  await assert.rejects(generate({ model: 'm', prompt: 'p' }, { onEvent: (ev) => seen.push(ev) }), (err) => err instanceof Error && err.message === ERR.message && err.fromStream === true);
+  assert.deepEqual(seen, [TOKEN, ERR]);
+});

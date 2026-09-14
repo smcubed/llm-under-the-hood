@@ -21,10 +21,11 @@ export async function login(passcode) {
 }
 
 /**
- * Stream one generation. `params`: { model, prompt, system, prefix, maxTokens, temperature, topLogprobs }.
- * Every normalized event ({type:'token'|'error'|'done'}) is passed to `onEvent`; resolves with the `done` event,
- * or null if the stream ended without one. Rejects with Error(message) (plus `.status`) for HTTP errors and with an
- * AbortError when `signal` is aborted, at which point the body is cancelled and no more events are delivered.
+ * Stream one generation (this client always streams). `params`: { model, prompt, system, prefix, maxTokens,
+ * temperature, topLogprobs }. Every normalized event ({type:'token'|'error'|'done'}) is passed to `onEvent`; resolves
+ * with the `done` event, or null if the stream ended without one. Rejects with Error(message) (plus `.status`) for
+ * HTTP errors; with Error(message) (plus `fromStream: true`) once the stream ends if it carried an `error` event; and
+ * with an AbortError when `signal` is aborted. On any rejection the body is cancelled and no more events are delivered.
  */
 export async function generate(params, { onEvent = () => {}, signal } = {}) {
   if (signal?.aborted) throw abortError();
@@ -41,30 +42,34 @@ export async function generate(params, { onEvent = () => {}, signal } = {}) {
   const onAbort = () => { reader.cancel().catch(() => {}); };
   signal?.addEventListener('abort', onAbort, { once: true });
   const decoder = new TextDecoder();
-  let buffer = '', done = null;
+  let buffer = '', done = null, streamError = null;
   const deliver = (raw) => {
     let ev;
     try { ev = JSON.parse(raw); } catch { return; }
     if (ev.type === 'done') done = ev;
+    if (ev.type === 'error' && !streamError) streamError = ev;
     onEvent(ev);
   };
+  const checkAbort = () => { if (signal?.aborted) throw abortError(); };
   try {
     for (;;) {
       const { value, done: finished } = await reader.read();
-      if (signal?.aborted) throw abortError();
+      checkAbort();
       if (finished) break;
       buffer += decoder.decode(value, { stream: true });
       const parsed = parseSSE(buffer);
       buffer = parsed.rest;
-      for (const raw of parsed.events) deliver(raw);
+      for (const raw of parsed.events) { checkAbort(); deliver(raw); }
     }
     buffer += decoder.decode();
     for (const raw of parseSSE(buffer + '\n\n').events) deliver(raw);
   } catch (err) {
+    reader.cancel().catch(() => {});
     if (signal?.aborted) throw abortError();
     throw err;
   } finally {
     signal?.removeEventListener('abort', onAbort);
   }
+  if (streamError) throw Object.assign(new Error(streamError.message || 'The model returned an error.'), { fromStream: true });
   return done;
 }
