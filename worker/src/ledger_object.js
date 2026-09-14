@@ -12,7 +12,6 @@ export class LedgerObject extends DurableObject {
   }
   async persist() { await this.ctx.storage.put('state', this.ledger.snapshot()); }
   async hit(clientId, limit) { const r = this.ledger.hit(clientId, limit); await this.persist(); return r; }
-  async canSpend(bucket, limit) { return this.ledger.canSpend(bucket, limit); }
   async charge(bucket, usd) { this.ledger.charge(bucket, usd); await this.persist(); }
   async reserveIfUnder(bucket, usd, limit) {
     const ok = this.ledger.reserveIfUnder(bucket, usd, limit);

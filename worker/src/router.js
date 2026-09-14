@@ -123,9 +123,9 @@ export async function handle(request, env, ctx) {
         if (!clientGone && controller) { try { controller.close(); } catch { /* already closed */ } }
       }
     })();
-    ctx.waitUntil(pump);
-
     if (collected) { await pump; return json(200, { events: collected }); }
+    // Streaming: the response returns now, so keep the pump alive past the client's disconnect.
+    ctx.waitUntil(pump);
     return new Response(readable, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' } });
   }
 

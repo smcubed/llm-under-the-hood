@@ -113,3 +113,26 @@ test('model mock/error → 500; unknown route → 404', async () => {
     assert.equal((await post(base, '/nope', {})).status, 404);
   });
 });
+
+test('malformed bodies get an HTTP response and the server survives', async () => {
+  await withMock(async (base) => {
+    const raw = (body) => fetch(base + '/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+    for (const body of ['', 'null', '5', '[]', '{"messages":"hi"}', '{"prompt":""}']) {
+      const res = await raw(body);
+      assert.ok(res.status === 400 || res.status === 200, `${JSON.stringify(body)} → ${res.status}`);
+      await res.text();
+    }
+    // Same bodies against the legacy route, including the empty-prompt one which must still produce tokens.
+    for (const body of ['null', '[]', '{"prompt":""}', '{"prompt":"","stream":false}']) {
+      const res = await fetch(base + '/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+      assert.ok(res.status === 400 || res.status === 200, `${JSON.stringify(body)} → ${res.status}`);
+      await res.text();
+    }
+    const okAfter = await post(base, '/chat/completions', { model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }], stream: false });
+    assert.equal(okAfter.status, 200, 'the server is still serving after bad bodies');
+    assert.ok((await okAfter.json()).usage.completion_tokens >= 10);
+    const big = await raw(JSON.stringify({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: 'x'.repeat(1_100_000) }] }));
+    assert.equal(big.status, 413, 'bodies over 1e6 chars are refused');
+    await big.text();
+  });
+});

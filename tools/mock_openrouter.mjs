@@ -26,10 +26,14 @@ const CONTINUATIONS = [
 const ALT_POOL = [' the', ' a', ' an', ',', ' and', ' of', ' to', ' in', ' that', ' which', ' with', ' was', ' is', ' patient', ' scan', ' chest', ' MRI', ' X', ' history', ' then'];
 
 const words = (s) => s.match(/\s*\S+/g) || [];
-const pickContinuation = (prompt) => CONTINUATIONS.find(c => c.test.test(prompt)).text;
+// Always returns a string: an empty prompt matches nothing above, so fall back to the last (generic) continuation.
+const pickContinuation = (prompt) => (CONTINUATIONS.find(c => c.test.test(prompt)) || CONTINUATIONS.at(-1)).text;
 
 function promptText(body, kind) {
-  if (kind === 'chat') return (body.messages || []).map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''))).join('\n');
+  if (kind === 'chat') {
+    if (!Array.isArray(body.messages)) return typeof body.messages === 'string' ? body.messages : '';
+    return body.messages.map(m => (typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? ''))).join('\n');
+  }
   return Array.isArray(body.prompt) ? body.prompt.join('\n') : String(body.prompt ?? '');
 }
 
@@ -91,16 +95,25 @@ function wholeCompletion(p, kind) {
 
 const sendJson = (res, status, obj) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const readBody = (req) => new Promise((resolve, reject) => { let s = ''; req.on('data', c => { s += c; }); req.on('end', () => resolve(s)); req.on('error', reject); });
+const MAX_BODY_CHARS = 1e6;
+const readBody = (req) => new Promise((resolve, reject) => {
+  let s = '';
+  req.on('data', c => { if (s.length < MAX_BODY_CHARS) s += c; });
+  req.on('end', () => (s.length > MAX_BODY_CHARS ? reject(Object.assign(new Error('body too large'), { status: 413 })) : resolve(s)));
+  req.on('error', reject);
+});
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 export function createMock({ tokenMs = DEFAULT_TOKEN_MS, log = () => {} } = {}) {
-  return http.createServer(async (req, res) => {
+  const handler = async (req, res) => {
     const url = new URL(req.url, 'http://mock');
     if (req.method === 'GET' && url.pathname === '/') return sendJson(res, 200, { ok: true, mock: 'openrouter', routes: ['/chat/completions', '/completions'] });
     const kind = url.pathname.endsWith('/chat/completions') ? 'chat' : url.pathname.endsWith('/completions') ? 'completion' : null;
     if (req.method !== 'POST' || !kind) return sendJson(res, 404, { error: { code: 404, message: `mock: no route for ${req.method} ${url.pathname}` } });
+    const raw = await readBody(req); // rejects with status 413 when over MAX_BODY_CHARS; the outer catch answers
     let body;
-    try { body = JSON.parse(await readBody(req) || '{}'); } catch { return sendJson(res, 400, { error: { code: 400, message: 'mock: body is not JSON' } }); }
+    try { body = JSON.parse(raw || '{}'); } catch { return sendJson(res, 400, { error: { code: 400, message: 'mock: body is not JSON' } }); }
+    if (!isPlainObject(body)) return sendJson(res, 400, { error: { code: 400, message: 'mock: body must be a JSON object' } });
     log(`${kind} ${body.model} stream=${body.stream !== false} logprobs=${body.logprobs ?? 'no'} max_tokens=${body.max_tokens ?? 'default'}`);
     if (body.model === 'mock/error') return sendJson(res, 500, { error: { code: 500, message: 'mock: simulated provider failure' } });
 
@@ -113,12 +126,22 @@ export function createMock({ tokenMs = DEFAULT_TOKEN_MS, log = () => {} } = {}) 
     if (kind === 'chat') write({ id: p.id, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: p.model, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, logprobs: null, finish_reason: null }] });
     for (let i = 0; i < p.tokens.length && open; i++) {
       await sleep(tokenMs);
+      if (!open) return; // the client may have gone away while we slept
       write(chunk(p, kind, i));
     }
     if (!open) return;
     write(finalChunk(p, kind));
     res.write('data: [DONE]\n\n');
     res.end();
+  };
+  // A thrown error must never take the whole mock down: answer 500 if we still can, otherwise just close the response.
+  return http.createServer((req, res) => {
+    handler(req, res).catch((err) => {
+      log(`error: ${err?.message || err}`);
+      const status = err?.status || 500;
+      if (!res.headersSent) return sendJson(res, status, { error: { code: status, message: `mock: ${err?.message || 'internal error'}` } });
+      res.end();
+    });
   });
 }
 

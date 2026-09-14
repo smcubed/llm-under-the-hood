@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { handle } from '../worker/src/router.js';
 import { Ledger } from '../worker/src/ledger.js';
 import { issueSession } from '../worker/src/session.js';
+import { startMock } from '../tools/mock_openrouter.mjs';
+import { getModel, estimateCost } from '../site/models.js';
 
 function makeEnv(overrides = {}) {
   const ledger = new Ledger();
@@ -131,7 +133,6 @@ test('budget check and reservation are one atomic ledger call', async () => {
   const r = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, { cookie: await cookie(env) }), env, ctx);
   assert.equal(r.status, 200); await r.text();
   assert.equal(calls.filter(k => k === 'reserveIfUnder').length, 1);
-  assert.ok(!calls.includes('canSpend'));
   assert.ok(Math.abs(net(env._charges) - FIXTURE_COST) < 1e-15, 'reservation + reconciliation still net to the real cost');
 });
 test('per-client rate limit → 429 with Retry-After', async () => {
@@ -219,4 +220,31 @@ test('per-IP limit defaults to 60 when the var is unset', async () => {
   let last;
   for (let i = 0; i < 61; i++) last = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, h(await cookie(env))), env, ctx);
   assert.equal(last.status, 429);
+});
+
+// End to end against the real mock upstream (tools/mock_openrouter.mjs) over loopback HTTP.
+test('end to end: Worker streams normalized events from the mock for chat and completions models, and charges its cost', async () => {
+  const server = await startMock(0, { tokenMs: 1 });
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    for (const modelId of ['openai/gpt-4o-mini', 'openai/gpt-3.5-turbo-instruct']) {
+      const env = makeEnv({ fetchUpstream: fetch, OPENROUTER_BASE_URL: base });
+      const prompt = 'The patient presented with';
+      const r = await handle(post('/api/generate', { model: modelId, prompt }, { cookie: await cookie(env) }), env, ctx);
+      assert.equal(r.status, 200, modelId);
+      const events = (await r.text()).split('\n\n').filter(Boolean).map(l => JSON.parse(l.replace(/^data: /, '')));
+      const tokens = events.filter(e => e.type === 'token');
+      assert.ok(tokens.length >= 10 && tokens.length <= 20, `${modelId}: 10–20 tokens, got ${tokens.length}`);
+      assert.equal(tokens[0].top.length, 5, `${modelId}: five alternatives on the first token`);
+      const done = events.at(-1);
+      assert.equal(done.type, 'done');
+      // The mock prices its usage from site/models.js; the Worker must report and charge exactly that.
+      const expected = estimateCost(getModel(modelId), Math.ceil(prompt.length / 4), tokens.length);
+      assert.ok(Math.abs(done.cost - expected) < 1e-15, `${modelId}: done.cost ${done.cost} vs mock ${expected}`);
+      assert.ok(Math.abs(net(env._charges, getModel(modelId).bucket) - expected) < 1e-15, `${modelId}: net charges equal the mock's cost`);
+    }
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise(r => server.close(r));
+  }
 });
