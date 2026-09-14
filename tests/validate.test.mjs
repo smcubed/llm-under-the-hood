@@ -41,3 +41,15 @@ test('rejects non-object and non-string fields', () => {
   assert.equal(validateGenerate(null).ok, false);
   assert.equal(validateGenerate({ ...good, prompt: 42 }).ok, false);
 });
+test('non-string system or prefix → "must be text", not a length message', () => {
+  const s = validateGenerate({ ...good, system: false });
+  assert.equal(s.ok, false); assert.match(s.message, /must be text/); assert.doesNotMatch(s.message, /limited/);
+  const p = validateGenerate({ ...good, prefix: 5 });
+  assert.equal(p.ok, false); assert.match(p.message, /must be text/); assert.doesNotMatch(p.message, /too long/);
+});
+test('rejects non-string model and array bodies', () => {
+  const m = validateGenerate({ ...good, model: 42 });
+  assert.equal(m.ok, false); assert.match(m.message, /model/i);
+  const a = validateGenerate([good]);
+  assert.equal(a.ok, false);
+});

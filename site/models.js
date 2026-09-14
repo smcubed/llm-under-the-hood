@@ -1,6 +1,6 @@
 export const LIMITS = { promptChars: 200, systemChars: 400, prefixChars: 1500, maxTokens: 200, topLogprobs: 10, temperatureMax: 1.5 };
 
-export const MODELS = [
+export const MODELS = Object.freeze([
   { id: 'openai/gpt-3.5-turbo-instruct', label: 'GPT-3.5 Instruct (autocomplete)', short: 'GPT-3.5 instruct', year: 2022, provider: 'OpenAI', open: false, logprobs: true, endpoint: 'completion', tokenizer: 'cl100k', bucket: 'default', price: { in: 1.5, out: 2.0 },
     blurb: 'A completion model from before ChatGPT. It does not answer you; it continues your text.' },
   { id: 'openai/gpt-3.5-turbo', label: 'ChatGPT 3.5 (2023)', short: 'GPT-3.5', year: 2023, provider: 'OpenAI', open: false, logprobs: true, endpoint: 'chat', tokenizer: 'cl100k', bucket: 'default', price: { in: 0.5, out: 1.5 },
@@ -17,14 +17,14 @@ export const MODELS = [
     blurb: 'Google\'s fast model. Does not share its probabilities.' },
   { id: 'meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B (open weights)', short: 'Llama 3.3', year: 2024, provider: 'Meta', open: true, logprobs: true, endpoint: 'chat', tokenizer: 'o200k', bucket: 'default', price: { in: 0.1, out: 0.32 },
     blurb: 'Open weights: anyone can download and run it. Uses its own tokenizer, so token counts differ.' },
-];
+].map(m => Object.freeze({ ...m, price: Object.freeze({ ...m.price }) })));
 
 export const DEFAULT_MODEL = 'openai/gpt-4o-mini';
 export const AUTOCOMPLETE_MODEL = 'openai/gpt-3.5-turbo-instruct';
 
 export function getModel(id) { return MODELS.find(m => m.id === id); }
 
-/** Estimated USD for a call when the upstream did not report cost. */
+/** Estimated USD for a call when the upstream did not report cost. Missing or invalid token counts count as 0. */
 export function estimateCost(model, promptTokens, completionTokens) {
-  return (promptTokens * model.price.in + completionTokens * model.price.out) / 1e6;
+  return ((Number(promptTokens) || 0) * model.price.in + (Number(completionTokens) || 0) * model.price.out) / 1e6;
 }

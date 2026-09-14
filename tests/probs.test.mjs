@@ -40,3 +40,22 @@ test('band thresholds', () => {
   assert.equal(band(0.4), 'mid'); assert.equal(band(0.25), 'mid');
   assert.equal(band(0.1), 'low'); assert.equal(band(null), 'unknown');
 });
+test('withProbs gives NaN for a null logprob and sums other from the rest', () => {
+  const r = withProbs([{ text: 'a', logprob: Math.log(0.5) }, { text: 'b', logprob: null }]);
+  assert.ok(Number.isNaN(r.items[1].p));
+  assert.ok(Math.abs(r.other - 0.5) < 1e-9);
+});
+test('rescale treats a non-finite temperature as argmax', () => {
+  for (const T of [NaN, undefined, Infinity, -Infinity]) {
+    const r = rescale(top, T);
+    assert.equal(r[0].p, 1); assert.equal(r[1].p, 0); assert.equal(r[2].p, 0);
+  }
+});
+test('rescale keeps logprob on its outputs in both branches', () => {
+  assert.equal(rescale(top, 1)[1].logprob, top[1].logprob);
+  assert.equal(rescale(top, 0)[1].logprob, top[1].logprob);
+});
+test('sample returns null for an empty distribution', () => {
+  assert.equal(sample([], () => 0.5), null);
+});
+test('band(NaN) is unknown', () => assert.equal(band(NaN), 'unknown'));

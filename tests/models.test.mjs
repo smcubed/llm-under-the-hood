@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MODELS, DEFAULT_MODEL, LIMITS, getModel } from '../site/models.js';
+import { MODELS, DEFAULT_MODEL, AUTOCOMPLETE_MODEL, LIMITS, getModel, estimateCost } from '../site/models.js';
 
 test('ladder has the eight approved models with required fields', () => {
   const ids = MODELS.map(m => m.id);
@@ -23,4 +23,23 @@ test('default model exists and supports logprobs', () => {
 test('getModel returns undefined for unknown id', () => assert.equal(getModel('nope/x'), undefined));
 test('limits are the design values', () => {
   assert.deepEqual(LIMITS, { promptChars: 200, systemChars: 400, prefixChars: 1500, maxTokens: 200, topLogprobs: 10, temperatureMax: 1.5 });
+});
+test('autocomplete model exists and uses the completion endpoint', () => {
+  assert.equal(getModel(AUTOCOMPLETE_MODEL).endpoint, 'completion');
+});
+test('model ids are unique', () => {
+  assert.equal(new Set(MODELS.map(m => m.id)).size, MODELS.length);
+});
+test('estimateCost uses per-million prices and treats missing counts as 0', () => {
+  const m = getModel('openai/gpt-4o-mini');
+  assert.equal(estimateCost(m, 1e6, 1e6), 0.75);
+  assert.equal(estimateCost(m, undefined, undefined), 0);
+  assert.equal(estimateCost(m, 'abc', null), 0);
+});
+test('model entries, their prices, and the ladder are frozen', () => {
+  assert.ok(Object.isFrozen(MODELS));
+  for (const m of MODELS) { assert.ok(Object.isFrozen(m)); assert.ok(Object.isFrozen(m.price)); }
+  assert.throws(() => { MODELS[0].price.in = 0; }, TypeError);
+  assert.throws(() => { MODELS[0].label = 'x'; }, TypeError);
+  assert.throws(() => { MODELS.push({}); }, TypeError);
 });

@@ -14,8 +14,10 @@ export function validateGenerate(body) {
   if (body.prompt.length > LIMITS.promptChars) return bad(`Prompts are limited to ${LIMITS.promptChars} characters.`);
   const system = body.system == null ? '' : body.system;
   const prefix = body.prefix == null ? '' : body.prefix;
-  if (typeof system !== 'string' || system.length > LIMITS.systemChars) return bad(`System prompts are limited to ${LIMITS.systemChars} characters.`);
-  if (typeof prefix !== 'string' || prefix.length > LIMITS.prefixChars) return bad('That continuation is too long to fork from.');
+  if (typeof system !== 'string') return bad('The system prompt must be text.');
+  if (system.length > LIMITS.systemChars) return bad(`System prompts are limited to ${LIMITS.systemChars} characters.`);
+  if (typeof prefix !== 'string') return bad('The continuation must be text.');
+  if (prefix.length > LIMITS.prefixChars) return bad('That continuation is too long to fork from.');
   return {
     ok: true,
     value: {
