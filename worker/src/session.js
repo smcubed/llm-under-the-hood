@@ -40,4 +40,9 @@ export function readCookie(header, name) {
   }
   return undefined;
 }
-export { safeEqual };
+/** Constant-time passcode check that does not leak the passcode length: compare HMAC digests, not the strings. */
+export async function passcodeMatches(supplied, expected, secret) {
+  if (typeof supplied !== 'string' || typeof expected !== 'string' || !expected) return false;
+  return safeEqual(await hmac(secret, supplied), await hmac(secret, expected));
+}
+export { safeEqual, hmac };

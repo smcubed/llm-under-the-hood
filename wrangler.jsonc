@@ -12,6 +12,7 @@
     "DAILY_BUDGET_USD": "5",
     "GPT4_DAILY_BUDGET_USD": "1",
     "PER_CLIENT_PER_MINUTE": "30",
+    "PER_IP_PER_MINUTE": "60",
     "AUTH_ATTEMPTS_PER_MINUTE": "10",
     "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
     "SITE_TITLE": "LLM Under the Hood"

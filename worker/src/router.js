@@ -1,7 +1,7 @@
 import { MODELS, estimateCost } from '../../site/models.js';
 import { validateGenerate } from './validate.js';
 import { buildUpstream, normalizeUpstream } from './openrouter.js';
-import { issueSession, verifySession, sessionCookieHeader, readCookie, safeEqual } from './session.js';
+import { issueSession, verifySession, sessionCookieHeader, readCookie, passcodeMatches } from './session.js';
 
 const json = (status, obj, headers = {}) => new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } });
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
@@ -13,8 +13,17 @@ export const secondsToUtcMidnight = (nowMs = Date.now()) => {
 
 async function readJson(request) { try { return await request.json(); } catch { return null; } }
 
+const REQUIRED_SECRETS = ['PASSCODE', 'COOKIE_SECRET', 'OPENROUTER_API_KEY'];
+
 export async function handle(request, env, ctx) {
   const url = new URL(request.url);
+  if (url.pathname.startsWith('/api/')) {
+    const missing = REQUIRED_SECRETS.filter(k => !env[k]);
+    if (missing.length) {
+      console.error(`Server is not configured: missing ${missing.join(', ')}. Set with: wrangler secret put <NAME>`);
+      return json(500, { message: 'Server is not configured.' });
+    }
+  }
   const ledger = env.LEDGER.getByName('global');
   const ip = request.headers.get('cf-connecting-ip') || 'unknown';
 
@@ -23,7 +32,7 @@ export async function handle(request, env, ctx) {
     if (!gate.ok) return json(429, { message: 'Too many attempts. Wait a minute and try again.' }, { 'retry-after': String(gate.retryAfterSec) });
     const body = await readJson(request);
     const supplied = typeof body?.passcode === 'string' ? body.passcode.trim() : '';
-    if (!safeEqual(supplied, env.PASSCODE)) return json(401, { message: 'That passcode is not right.' });
+    if (!(await passcodeMatches(supplied, env.PASSCODE, env.COOKIE_SECRET))) return json(401, { message: 'That passcode is not right.' });
     const token = await issueSession(env.COOKIE_SECRET);
     return new Response(null, { status: 204, headers: { 'set-cookie': sessionCookieHeader(token), 'cache-control': 'no-store' } });
   }
@@ -41,8 +50,11 @@ export async function handle(request, env, ctx) {
     const body = await readJson(request);
     const v = validateGenerate(body);
     if (!v.ok) return json(v.status, { message: v.message });
+    // Per-client limit (cookie) plus a per-IP limit so re-authenticating for a fresh client id does not reset the budget of requests.
     const rl = await ledger.hit(sess.clientId, num(env.PER_CLIENT_PER_MINUTE, 30));
     if (!rl.ok) return json(429, { message: 'You are sending requests quickly. Take a breath and try again in a moment.' }, { 'retry-after': String(rl.retryAfterSec) });
+    const ipl = await ledger.hit(`ip:${ip}`, num(env.PER_IP_PER_MINUTE, 60));
+    if (!ipl.ok) return json(429, { message: 'Too many requests from this network right now. Try again in a moment.' }, { 'retry-after': String(ipl.retryAfterSec) });
     const { model } = v.value;
     const budget = model.bucket === 'gpt4' ? num(env.GPT4_DAILY_BUDGET_USD, 1) : num(env.DAILY_BUDGET_USD, 5);
     if (!(await ledger.canSpend(model.bucket, budget))) {

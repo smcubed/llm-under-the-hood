@@ -155,3 +155,42 @@ test('GET /api/models returns the ladder; other paths fall through to assets', a
   assert.equal(m.length, 8);
   assert.equal(await (await handle(new Request('https://x/index.html'), env, ctx)).text(), 'asset');
 });
+test('GET /api/session → 401 without a valid cookie, 204 with one', async () => {
+  const env = makeEnv();
+  assert.equal((await handle(new Request('https://x/api/session'), env, ctx)).status, 401);
+  assert.equal((await handle(new Request('https://x/api/session', { headers: { cookie: 'sess=garbage' } }), env, ctx)).status, 401);
+  assert.equal((await handle(new Request('https://x/api/session', { headers: { cookie: await cookie(env) } }), env, ctx)).status, 204);
+});
+test('unknown /api path → 404 JSON, not an asset', async () => {
+  const r = await handle(new Request('https://x/api/nope'), makeEnv(), ctx);
+  assert.equal(r.status, 404); assert.match(r.headers.get('content-type'), /json/);
+  assert.equal((await r.json()).message, 'Not found.');
+});
+test('missing secrets → 500 "Server is not configured." on /api/*, but assets still serve', async () => {
+  for (const missing of ['PASSCODE', 'COOKIE_SECRET', 'OPENROUTER_API_KEY']) {
+    const env = makeEnv({ [missing]: undefined });
+    const r = await handle(post('/api/auth', { passcode: 'test' }), env, ctx);
+    assert.equal(r.status, 500, missing); assert.equal((await r.json()).message, 'Server is not configured.');
+    assert.equal((await handle(new Request('https://x/api/models'), env, ctx)).status, 500, missing);
+    assert.equal(await (await handle(new Request('https://x/index.html'), env, ctx)).text(), 'asset', missing);
+  }
+  const env = makeEnv({ PASSCODE: '' });
+  assert.equal((await handle(post('/api/auth', { passcode: '' }), env, ctx)).status, 500, 'empty passcode counts as missing');
+});
+test('per-IP limit on /api/generate cannot be escaped by re-authenticating', async () => {
+  const env = makeEnv({ PER_IP_PER_MINUTE: '1', PER_CLIENT_PER_MINUTE: '30' });
+  const h = (c) => ({ cookie: c, 'cf-connecting-ip': '9.9.9.9' });
+  const ok = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, h(await cookie(env))), env, ctx);
+  assert.equal(ok.status, 200);
+  const r = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, h(await cookie(env))), env, ctx);
+  assert.equal(r.status, 429); assert.ok(r.headers.get('retry-after'));
+  const other = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, { cookie: await cookie(env), 'cf-connecting-ip': '8.8.8.8' }), env, ctx);
+  assert.equal(other.status, 200, 'a different IP is unaffected');
+});
+test('per-IP limit defaults to 60 when the var is unset', async () => {
+  const env = makeEnv({ PER_IP_PER_MINUTE: undefined, PER_CLIENT_PER_MINUTE: '100' });
+  const h = (c) => ({ cookie: c, 'cf-connecting-ip': '7.7.7.7' });
+  let last;
+  for (let i = 0; i < 61; i++) last = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, h(await cookie(env))), env, ctx);
+  assert.equal(last.status, 429);
+});
