@@ -79,7 +79,7 @@ export function mount(root, store) {
     const model = getModel(state.modelId);
     const name = model?.tokenizer || 'o200k';
     const { text, example: usingExample } = pickText(state.prompt, example);
-    setStatus(status, loaded.has(name) ? (usingExample ? EXAMPLE_NOTE : '') : 'loading tokenizer…');
+    setStatus(status, loaded.has(name) ? (usingExample ? EXAMPLE_NOTE : '') : 'Loading tokenizer…');
     let enc;
     try {
       enc = await loadTokenizer(name);

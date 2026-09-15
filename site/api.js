@@ -8,9 +8,21 @@ async function safeJson(response) {
 
 const abortError = () => new DOMException('The request was aborted.', 'AbortError');
 
-/** True when the signed session cookie is still valid. */
+const SESSION_CHECK_MS = 6000;
+
+/** True when the signed session cookie is still valid. Any failure (offline, timeout) counts as "no session", so the
+ *  passcode gate shows instead of the page hanging on a blank screen. */
 export async function checkSession() {
-  return (await fetch('/api/session')).status === 204;
+  try {
+    return (await fetch('/api/session', { signal: AbortSignal.timeout(SESSION_CHECK_MS) })).status === 204;
+  } catch {
+    return false;
+  }
+}
+
+/** A 401 mid-session means the cookie expired (or the passcode changed); app.js listens and shows the gate again. */
+function announceSessionExpired() {
+  if (typeof document !== 'undefined') document.dispatchEvent(new Event('session-expired'));
 }
 
 /** → { ok: true } or { ok: false, message }. */
@@ -34,6 +46,7 @@ export async function generate(params, { onEvent = () => {}, signal } = {}) {
   const r = await fetch('/api/generate', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body), signal });
   if (!r.ok) {
     const message = (await safeJson(r))?.message || `The server returned an error (${r.status}). Try again in a moment.`;
+    if (r.status === 401) announceSessionExpired();
     throw Object.assign(new Error(message), { status: r.status });
   }
   if (!r.body) return null;

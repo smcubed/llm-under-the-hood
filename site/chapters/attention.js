@@ -5,7 +5,7 @@
  */
 import { loadTokenizer, tokenize } from '../tokenize.js';
 import { getModel } from '../models.js';
-import { el, svg, tokenChip, chipClass, displayToken, debounce, notice, prefersReducedMotion, setStatus } from '../dom.js';
+import { el, svg, tokenChip, chipClass, displayToken, debounce, loadWithRetry, prefersReducedMotion, setStatus } from '../dom.js';
 import { pickText, FALLBACK_EXAMPLE, EXAMPLE_NOTE } from './tokens.js';
 
 const DATA_URL = 'data/attention.json';
@@ -226,13 +226,7 @@ export function mount(root, store) {
   // ---- Mount ----------------------------------------------------------------------------------------------------
   viz.replaceChildren(panelA, panelB);
   const load = async () => {
-    setStatus(statusA, LOADING_NOTE);
-    try { data = await loadAttention(); }
-    catch (err) {
-      console.error('attention: could not load data', err);
-      notice(statusA, 'Could not load the attention data.', { retry: load });
-      return;
-    }
+    data = await loadWithRetry(statusA, loadAttention, { note: LOADING_NOTE, failMsg: 'Could not load the attention data.' });
     statusA.hidden = true;
     buildA();
   };

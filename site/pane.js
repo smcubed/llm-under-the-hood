@@ -198,7 +198,10 @@ export function createOutputPane(root, {
     // still open when the pointer reaches a different chip must be a pinned one.
     chipsRoot.addEventListener('mouseover', (e) => {
       const chip = chipOf(e);
-      if (!chip || popoverAnchor() !== null) return;
+      if (!chip) return;
+      const anchor = popoverAnchor();
+      if (anchor && !anchor.isConnected) closePopover({ restoreFocus: false }); // its chips were replaced; it is orphaned, not pinned
+      if (popoverAnchor() !== null) return;
       openAlternatives(chip, { hover: true });
     });
     chipsRoot.addEventListener('mouseout', (e) => {

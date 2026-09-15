@@ -133,6 +133,8 @@ export function chipRow(root) {
       return queue(chip);
     },
     insert: queue,
+    // `scheduled` is left as is: a flush already queued finds `frag` null and is a harmless no-op, and a chip appended
+    // right after the reset reuses that pending flush instead of scheduling a second one.
     reset() { frag = null; count = 0; root.replaceChildren(); },
     flush,
     get count() { return count; },
@@ -163,4 +165,25 @@ export function notice(root, message, { retry } = {}) {
     retry ? el('button', { type: 'button', class: 'secondary', onClick: retry, text: 'Retry' }) : null);
   root.replaceChildren(box);
   return box;
+}
+
+/**
+ * Load data for a chapter with a visible loading state and a Retry on failure.
+ * `showNote(target, note)` (default: setStatus) draws the loading state; when `loader()` throws, the error is logged
+ * and `target` gets a `.notice` with `failMsg` and a Retry button that runs the whole thing again. Resolves with the
+ * loaded value once an attempt succeeds (never rejects: a failure just waits for Retry).
+ */
+export function loadWithRetry(target, loader, { note, failMsg, showNote = setStatus }) {
+  return new Promise((resolve) => {
+    const attempt = async () => {
+      showNote(target, note);
+      try {
+        resolve(await loader());
+      } catch (err) {
+        console.error(failMsg, err);
+        notice(target, failMsg, { retry: attempt });
+      }
+    };
+    attempt();
+  });
 }

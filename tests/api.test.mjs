@@ -120,3 +120,28 @@ test('generate: an error event mid-stream is delivered, then the call rejects wi
   await assert.rejects(generate({ model: 'm', prompt: 'p' }, { onEvent: (ev) => seen.push(ev) }), (err) => err instanceof Error && err.message === ERR.message && err.fromStream === true);
   assert.deepEqual(seen, [TOKEN, ERR]);
 });
+
+test('checkSession: passes a timeout signal and treats a failed fetch as "no session"', async () => {
+  stubFetch(async (url, init) => { assert.ok(init.signal instanceof AbortSignal, 'a timeout signal is handed to fetch'); throw new TypeError('network down'); });
+  assert.equal(await checkSession(), false);
+  stubFetch(async () => { throw new DOMException('timed out', 'TimeoutError'); });
+  assert.equal(await checkSession(), false);
+});
+
+test('generate: a 401 rejects with status 401 and announces session-expired on the document', async () => {
+  const { installFakeDom } = await import('./helpers/fake-dom.mjs');
+  const dom = installFakeDom();
+  try {
+    const seen = [];
+    document.addEventListener('session-expired', (e) => seen.push(e.type));
+    stubFetch(new Response(JSON.stringify({ message: 'Please sign in.' }), { status: 401, headers: { 'content-type': 'application/json' } }));
+    await assert.rejects(generate({ model: 'm', prompt: 'p' }, { onEvent: () => {} }), (err) => err.status === 401 && err.message === 'Please sign in.');
+    assert.deepEqual(seen, ['session-expired']);
+  } finally { dom.restore(); }
+});
+
+test('generate: a 401 without a document (no DOM) still rejects cleanly', async () => {
+  assert.equal(typeof globalThis.document, 'undefined');
+  stubFetch(new Response(null, { status: 401 }));
+  await assert.rejects(generate({ model: 'm', prompt: 'p' }, { onEvent: () => {} }), (err) => err.status === 401);
+});

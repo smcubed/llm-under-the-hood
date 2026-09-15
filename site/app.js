@@ -20,9 +20,9 @@ function showGate() {
 }
 let chaptersMounted = false;
 let sessionReady = false;   // Run stays disabled until the session check has settled and the page is shown
-let syncRun = () => {};
-/** Reveal the page and mount the chapters exactly once, only now that their sections have layout. */
-function showMain() {
+/** Reveal the page and mount the chapters exactly once, only now that their sections have layout. `syncRun` is the
+ *  prompt form's sync (from wirePrompt), which re-enables Run now that the session is live. */
+function showMain(syncRun) {
   $('#gate').hidden = true;
   $('#main').hidden = false;
   $('#strip').hidden = false;
@@ -32,7 +32,20 @@ function showMain() {
   if (!chaptersMounted) { chaptersMounted = true; mountChapters(); }
 }
 
-function wireGate() {
+/** Sent by api.js when /api/generate answers 401: the cookie expired or the passcode changed. Back to the gate. */
+function wireSessionExpiry(syncRun) {
+  document.addEventListener('session-expired', () => {
+    if (!sessionReady) return;
+    sessionReady = false;
+    syncRun();
+    showGate();
+    const error = $('#gate-error');
+    error.textContent = 'Your session expired. Enter the class passcode again.';
+    error.hidden = false;
+  });
+}
+
+function wireGate(syncRun) {
   const form = $('#gate-form'), input = $('#passcode'), error = $('#gate-error'), submit = $('#gate-submit');
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -42,7 +55,7 @@ function wireGate() {
     submit.disabled = true;
     try {
       const r = await login(passcode);
-      if (r.ok) { input.value = ''; showMain(); $('#prompt')?.focus(); return; }
+      if (r.ok) { input.value = ''; showMain(syncRun); $('#prompt')?.focus(); return; }
       error.textContent = r.message; error.hidden = false; input.select();
     } catch {
       error.textContent = 'Could not reach the server. Check your connection and try again.'; error.hidden = false;
@@ -52,6 +65,7 @@ function wireGate() {
   });
 }
 
+/** Wire the prompt form; returns its `sync`, which recomputes the counter, Run's disabled state and the store. */
 function wirePrompt() {
   const textarea = $('#prompt'), counter = $('#counter'), run = $('#run'), select = $('#model'), blurb = $('#model-blurb'), form = $('#prompt-form');
   textarea.maxLength = LIMITS.promptChars;
@@ -62,7 +76,6 @@ function wirePrompt() {
     run.disabled = !sessionReady || value.trim().length === 0;
     store.set({ prompt: value });
   };
-  syncRun = sync;
   textarea.addEventListener('input', sync);
   for (const chip of document.querySelectorAll('.starter')) {
     chip.addEventListener('click', () => { textarea.value = chip.textContent.trim(); sync(); textarea.focus(); });
@@ -80,6 +93,7 @@ function wirePrompt() {
     store.set({ runId: Date.now() });
   });
   sync();
+  return sync;
 }
 
 function wireStrip() {
@@ -134,13 +148,12 @@ function wireRunScroll() {
 }
 
 async function boot() {
-  wireGate();
-  wirePrompt();
+  const syncRun = wirePrompt();
+  wireGate(syncRun);
+  wireSessionExpiry(syncRun);
   wireStrip();
   wireRunScroll();
-  let ok = false;
-  try { ok = await checkSession(); } catch { ok = false; }
-  if (ok) showMain(); else showGate();
+  if (await checkSession()) showMain(syncRun); else showGate();
 }
 
 if (typeof document !== 'undefined') {

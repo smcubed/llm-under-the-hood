@@ -146,6 +146,7 @@ export function createFakeDocument() {
   doc.addEventListener = (type, fn) => { (doc.listeners[type] ||= []).push(fn); };
   doc.removeEventListener = (type, fn) => { doc.listeners[type] = (doc.listeners[type] || []).filter(f => f !== fn); };
   doc.dispatch = (type, event = {}) => { const ev = { type, target: doc, ...event }; for (const fn of [...(doc.listeners[type] || [])]) fn(ev); return ev; };
+  doc.dispatchEvent = (ev) => { for (const fn of [...(doc.listeners[ev.type] || [])]) fn(ev); return true; }; // real Event objects, as in a browser
   doc.documentElement = fakeNode('html', null, doc);
   doc.documentElement.clientWidth = 1024;
   doc.body = fakeNode('body', null, doc);

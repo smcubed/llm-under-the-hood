@@ -11,7 +11,7 @@
 import { getModel, LIMITS } from '../models.js';
 import { rescale, sample } from '../probs.js';
 import { el, notice, prefersReducedMotion, setLiveStatus } from '../dom.js';
-import { closePopover } from '../popover.js';
+import { closePopoverWithin } from '../popover.js';
 import { createRun } from '../run.js';
 import { request } from '../stream.js';
 import { barRows, makeBar, paintBar } from '../bars.js';
@@ -201,7 +201,7 @@ export function mount(root, store) {
   };
 
   const continueFrom = (maxTokens) => {
-    closePopover();
+    closePopoverWithin(root);
     errorSlot.replaceChildren();
     pane.start(ctx, { model: model.id, prompt, system, maxTokens, topLogprobs: STEP_TOP, temperature, prefix: joinTokens(pane.tokens) });
   };
@@ -218,7 +218,7 @@ export function mount(root, store) {
     const dist = rescale(first.top, temperature);
     const pick = sample(dist, Math.random);
     if (!pick) return;
-    closePopover();
+    closePopoverWithin(root);
     pane.clearNotice();
     const i = dist.indexOf(pick);
     const raw = first.top[i];
@@ -263,7 +263,7 @@ export function mount(root, store) {
     errorSlot.replaceChildren();
     barsBox.replaceChildren();
     barsCap.textContent = '';
-    runCtx.onDispose(() => { firstReq?.abort(); firstReq = null; closePopover(); });
+    runCtx.onDispose(() => { firstReq?.abort(); firstReq = null; closePopoverWithin(root); });
     fetchFirst();
   });
   renderControls();

@@ -25,11 +25,11 @@ export function installScriptedFetch() {
   const byModel = new Map();
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
-    const body = JSON.parse(init.body);
-    calls.push({ url, body, signal: init.signal });
+    const body = init?.body ? JSON.parse(init.body) : {};   // GET /api/session and the like carry no body
+    calls.push({ url, body, signal: init?.signal });
     const perModel = byModel.get(body.model);
     const next = (perModel || anyQueue).shift();
-    if (!next) throw new Error(`test: no scripted response left${perModel ? ` for ${body.model}` : ''}`);
+    if (!next) throw new Error(`test: no scripted response left for ${url}${perModel ? ` (model ${body.model})` : ''}`);
     return typeof next === 'function' ? next() : next;
   };
   const script = (modelOrRes, res) => {

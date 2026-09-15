@@ -266,9 +266,18 @@ button.primary:not(:disabled):hover { filter: brightness(1.08); }
   .strip-btn { padding: 6px 8px; font-size: 0.9rem; }
 }
 @media print {
+  /* Print on white regardless of the OS colour scheme: the light palette wins over the dark-mode block above. */
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #5f6a73; --accent: #0f7f7a; --accent-fg: #ffffff; --warn: #b4540a;
+    --card: #ffffff; --border: #d9dde2;
+    --chip-1: #ffd8a8; --chip-2: #c3f0d4; --chip-3: #dcd6ff; --chip-4: #c9e6ff; --chip-5: #fff3a8; --chip-6: #ffd1dc;
+    --p-high: #2f8f4e; --p-mid: #d99a1b; --p-low: #c8402f; --shadow: transparent;
+  }
   .strip, .starters, .controls, .predict-controls, .compare-actions, .system-actions, .legend-row, .popover, .map-tip, .try { display: none !important; }
   body { padding-inline: 0; background: var(--card); }
-  .chapter { min-height: 0; break-inside: avoid; }
+  /* A chapter can be longer than a page, so keep each figure, pane and demo together instead of the whole chapter. */
+  .chapter { min-height: 0; }
+  .viz, .pane, .demo { break-inside: avoid; }
   .viz { overflow: visible; }
 }
 

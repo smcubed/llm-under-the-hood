@@ -3,7 +3,7 @@
  * module scope). Words from the prompt that are in the vocabulary are drawn larger with labels; hover or focus on any
  * point shows its five nearest neighbors. No API calls. Follows the chapter contract in tokens.js.
  */
-import { el, svg, debounce, notice, prefersReducedMotion } from '../dom.js';
+import { el, svg, debounce, loadWithRetry, prefersReducedMotion } from '../dom.js';
 import { pickText, FALLBACK_EXAMPLE } from './tokens.js';
 
 export const VIEW = { w: 600, h: 400, pad: 24 };
@@ -142,14 +142,8 @@ export function mount(root, store) {
 
   const load = async () => {
     // A skeleton the size of the map keeps the page from jumping when the data lands.
-    viz.replaceChildren(el('div', { class: 'map-skeleton', 'aria-hidden': 'true' }), el('p', { class: 'status muted small', role: 'status', text: LOADING_NOTE }));
-    try {
-      data = await loadEmbeddings();
-    } catch (err) {
-      console.error('numbers: could not load embeddings', err);
-      notice(viz, 'Could not load the word map.', { retry: load });
-      return;
-    }
+    const showNote = (target, note) => target.replaceChildren(el('div', { class: 'map-skeleton', 'aria-hidden': 'true' }), el('p', { class: 'status muted small', role: 'status', text: note }));
+    data = await loadWithRetry(viz, loadEmbeddings, { note: LOADING_NOTE, failMsg: 'Could not load the word map.', showNote });
     build();
     highlight();
   };

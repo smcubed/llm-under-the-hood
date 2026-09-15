@@ -11,12 +11,15 @@ export function formatCost(usd) {
   return `$${n.toFixed(n < 1 ? 3 : 2)}`;
 }
 
-/** Milliseconds → seconds with one decimal ("0.4 s", "1.3 s"); under 50 ms → "< 0.1 s"; null/NaN/negative → "". */
+/** Below this, a latency is shown as "< 0.1 s" rather than rounding to a misleading "0.0 s". */
+const SUB_TENTH_MS = 50;
+
+/** Milliseconds → seconds with one decimal ("0.4 s", "1.3 s"); under SUB_TENTH_MS → "< 0.1 s"; null/NaN/negative → "". */
 export function formatLatency(ms) {
   if (ms === null || ms === undefined || ms === '') return '';
   const n = Number(ms);
   if (!Number.isFinite(n) || n < 0) return '';
-  if (n < 50) return '< 0.1 s';
+  if (n < SUB_TENTH_MS) return '< 0.1 s';
   return `${(Math.round(n / 100) / 10).toFixed(1)} s`; // round in tenths first: (0.85).toFixed(1) is "0.8" in binary floating point
 }
 

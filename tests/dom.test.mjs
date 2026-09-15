@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { el, svg, displayToken, chipClass, debounce, tokenChip, notice, setStatus, setLiveStatus, chipRow, setChildren } from '../site/dom.js';
+import { el, svg, displayToken, chipClass, debounce, tokenChip, notice, setStatus, setLiveStatus, chipRow, setChildren, loadWithRetry } from '../site/dom.js';
 import { installFakeDom, fakeNode } from './helpers/fake-dom.mjs';
 
 let dom;
@@ -201,4 +201,33 @@ test('setChildren replaces the content and skips null, undefined and false child
   setChildren(node);
   assert.equal(node.children.length, 0);
   assert.equal(node.textContent, '');
+});
+
+test('loadWithRetry: shows the note while loading, resolves with the data, and offers Retry after a failure', async () => {
+  const target = fakeNode('p');
+  let attempt = 0;
+  const loader = async () => { attempt += 1; if (attempt === 1) throw new Error('HTTP 500'); return { ok: attempt }; };
+  const origError = console.error; const errors = [];
+  console.error = (...a) => errors.push(a);
+  try {
+    const p = loadWithRetry(target, loader, { note: 'Loading…', failMsg: 'Could not load it.' });
+    assert.equal(target.textContent, 'Loading…');
+    assert.equal(target.hidden, false);
+    await new Promise(r => setTimeout(r, 0));
+    const box = target.children[0];
+    assert.equal(box.className, 'notice notice-inline');
+    assert.equal(box.children[0].textContent, 'Could not load it.');
+    assert.equal(errors.length, 1);
+    box.children[1].listeners.click[0]();          // Retry
+    assert.equal(target.textContent, 'Loading…');  // the note is back while the second attempt runs
+    assert.deepEqual(await p, { ok: 2 });
+  } finally { console.error = origError; }
+});
+
+test('loadWithRetry: a custom showNote controls how the loading state is drawn', async () => {
+  const target = fakeNode('div');
+  const shown = [];
+  const data = await loadWithRetry(target, async () => 'data', { note: 'N', failMsg: 'F', showNote: (t, n) => shown.push([t, n]) });
+  assert.equal(data, 'data');
+  assert.deepEqual(shown, [[target, 'N']]);
 });
