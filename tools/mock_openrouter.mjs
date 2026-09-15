@@ -1,6 +1,8 @@
 // Local stand-in for OpenRouter so the Worker and the UI can be exercised offline.
 // POST /chat/completions and POST /completions stream a canned, prompt-aware continuation as SSE,
-// one token every ~60 ms, in the same shapes OpenRouter uses. `npm run mock` listens on 8788.
+// one token every ~60 ms (MOCK_TOKEN_MS overrides), in the same shapes OpenRouter uses. `npm run mock` listens on 8788.
+// A prefix the client has already written (an assistant message, or a completion prompt ending in canned text) is not
+// repeated: the stream picks up where the canned text left off.
 import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -9,7 +11,16 @@ import { getModel, estimateCost } from '../site/models.js';
 const DEFAULT_PORT = 8788;
 const DEFAULT_TOKEN_MS = 60;
 const MAX_TOKENS_DEFAULT = 20; // "10–20 fake tokens"
-const LOGPROB_LADDER = [-0.2, -1.9, -2.6, -3.3, -4.0];
+// Chosen-token logprob first, then four alternatives. The ladders cycle by token position so the confidence bands show
+// green (90%), amber (55%), red (22%), red (10%) in turn, and each ladder's probabilities sum to 0.95 or less so the
+// bar chart keeps a visible "everything else" remainder.
+const LOGPROB_LADDERS = [
+  [-0.1, -3.6, -4.5, -5.5, -6.5],
+  [-0.6, -1.5, -2.5, -3.5, -4.5],
+  [-1.5, -1.7, -2.0, -2.4, -2.8],
+  [-2.3, -2.4, -2.6, -2.9, -3.2],
+];
+const ladderFor = (i) => LOGPROB_LADDERS[((i % LOGPROB_LADDERS.length) + LOGPROB_LADDERS.length) % LOGPROB_LADDERS.length];
 const FALLBACK_PRICE = { in: 0.15, out: 0.6 }; // per million tokens, for model ids not in the ladder
 
 // Canned continuations, picked by what the prompt looks like so the UI looks alive.
@@ -29,23 +40,40 @@ const words = (s) => s.match(/\s*\S+/g) || [];
 // Always returns a string: an empty prompt matches nothing above, so fall back to the last (generic) continuation.
 const pickContinuation = (prompt) => (CONTINUATIONS.find(c => c.test.test(prompt)) || CONTINUATIONS.at(-1)).text;
 
+const contentText = (m) => (typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? ''));
 function promptText(body, kind) {
   if (kind === 'chat') {
     if (!Array.isArray(body.messages)) return typeof body.messages === 'string' ? body.messages : '';
-    return body.messages.map(m => (typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? ''))).join('\n');
+    return body.messages.map(contentText).join('\n');
   }
   return Array.isArray(body.prompt) ? body.prompt.join('\n') : String(body.prompt ?? '');
 }
+/** Text the client has already written, which the continuation must not repeat: the trailing assistant message of a
+ *  chat request, or the whole prompt of a completion request (the Worker appends the prefix to it). */
+function prefixText(body, kind) {
+  if (kind === 'chat') {
+    const last = Array.isArray(body.messages) ? body.messages.at(-1) : null;
+    return last?.role === 'assistant' ? contentText(last) : '';
+  }
+  return promptText(body, kind);
+}
+/** How many leading canned tokens `prefix` already ends with. */
+export function coveredTokens(all, prefix) {
+  if (!prefix) return 0;
+  for (let k = all.length; k > 0; k--) if (prefix.endsWith(all.slice(0, k).join(''))) return k;
+  return 0;
+}
 
-/** Chosen token first, then four distinct plausible alternatives, with decaying logprobs. */
+/** Chosen token first, then four distinct plausible alternatives, with decaying logprobs from the ladder for step `i`. */
 function topFive(token, i, all) {
+  const ladder = ladderFor(i);
   const seen = new Set([token]);
-  const out = [{ token, logprob: LOGPROB_LADDER[0] }];
+  const out = [{ token, logprob: ladder[0] }];
   const candidates = [...all.slice(i + 1), ...ALT_POOL, ...all];
   for (const c of candidates) {
     if (out.length === 5) break;
     if (seen.has(c)) continue;
-    seen.add(c); out.push({ token: c, logprob: LOGPROB_LADDER[out.length] });
+    seen.add(c); out.push({ token: c, logprob: ladder[out.length] });
   }
   return out;
 }
@@ -54,24 +82,28 @@ const legacyLogprobs = (top) => ({ tokens: [top[0].token], token_logprobs: [top[
 
 function plan(body, kind) {
   const prompt = promptText(body, kind);
-  const all = words(pickContinuation(prompt));
+  const prefix = prefixText(body, kind);
+  let all = words(pickContinuation(prompt));
+  let start = coveredTokens(all, prefix);
+  if (start === all.length) { all = words(CONTINUATIONS.at(-1).text); start = coveredTokens(all, prefix); } // the canned text is used up: move on to the generic one
+  const remaining = all.length - start;
   const maxTokens = Number.isInteger(body.max_tokens) && body.max_tokens > 0 ? body.max_tokens : MAX_TOKENS_DEFAULT;
-  const n = Math.min(all.length, MAX_TOKENS_DEFAULT, maxTokens);
-  const tokens = all.slice(0, n);
+  const n = Math.min(remaining, MAX_TOKENS_DEFAULT, maxTokens);
+  const tokens = all.slice(start, start + n);
   // 'length' only when the caller's own max_tokens cut the continuation short; our 20-token cap reads as a natural stop.
-  const finish = Number.isInteger(body.max_tokens) && body.max_tokens < all.length && n === body.max_tokens ? 'length' : 'stop';
+  const finish = Number.isInteger(body.max_tokens) && body.max_tokens < remaining && n === body.max_tokens ? 'length' : 'stop';
   const wantLogprobs = kind === 'chat' ? Boolean(body.logprobs) : (body.logprobs != null && body.logprobs !== false);
   const model = getModel(body.model);
   const promptTokens = Math.ceil(prompt.length / 4);
   const price = model?.price || FALLBACK_PRICE;
   const cost = estimateCost({ price }, promptTokens, n);
   const usage = { prompt_tokens: promptTokens, completion_tokens: n, total_tokens: promptTokens + n, cost };
-  return { tokens, all, finish, wantLogprobs, usage, id: `${kind === 'chat' ? 'gen' : 'cmpl'}-mock-${Date.now().toString(36)}`, model: body.model };
+  return { tokens, all, start, finish, wantLogprobs, usage, id: `${kind === 'chat' ? 'gen' : 'cmpl'}-mock-${Date.now().toString(36)}`, model: body.model };
 }
 
 function chunk(p, kind, i) {
   const token = p.tokens[i];
-  const top = p.wantLogprobs ? topFive(token, i, p.all) : null;
+  const top = p.wantLogprobs ? topFive(token, p.start + i, p.all) : null;
   const base = { id: p.id, object: kind === 'chat' ? 'chat.completion.chunk' : 'text_completion', created: Math.floor(Date.now() / 1000), model: p.model };
   if (kind === 'chat') return { ...base, choices: [{ index: 0, delta: { content: token }, logprobs: top ? chatLogprobs(top) : null, finish_reason: null }] };
   return { ...base, choices: [{ index: 0, text: token, logprobs: top ? legacyLogprobs(top) : null, finish_reason: null }] };
@@ -83,7 +115,7 @@ function finalChunk(p, kind) {
 }
 function wholeCompletion(p, kind) {
   const text = p.tokens.join('');
-  const tops = p.wantLogprobs ? p.tokens.map((t, i) => topFive(t, i, p.all)) : null;
+  const tops = p.wantLogprobs ? p.tokens.map((t, i) => topFive(t, p.start + i, p.all)) : null;
   const base = { id: p.id, created: Math.floor(Date.now() / 1000), model: p.model, usage: p.usage };
   if (kind === 'chat') {
     const logprobs = tops ? { content: tops.map(top => ({ token: top[0].token, logprob: top[0].logprob, bytes: null, top_logprobs: top })) } : null;
@@ -157,7 +189,9 @@ export function startMock(port = DEFAULT_PORT, opts = {}) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const port = Number(process.env.MOCK_PORT) || DEFAULT_PORT;
-  startMock(port, { log: (m) => console.log(`[mock] ${m}`) })
-    .then(() => console.log(`Mock OpenRouter listening on http://127.0.0.1:${port} (POST /chat/completions, /completions)`))
+  const envMs = Number(process.env.MOCK_TOKEN_MS);
+  const tokenMs = process.env.MOCK_TOKEN_MS && Number.isFinite(envMs) && envMs >= 0 ? envMs : DEFAULT_TOKEN_MS; // e.g. MOCK_TOKEN_MS=400 to test Pause by hand
+  startMock(port, { tokenMs, log: (m) => console.log(`[mock] ${m}`) })
+    .then(() => console.log(`Mock OpenRouter listening on http://127.0.0.1:${port} (POST /chat/completions, /completions; ${tokenMs} ms per token)`))
     .catch((err) => { console.error('mock: failed to start', err.message); process.exit(1); });
 }

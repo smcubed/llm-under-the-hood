@@ -8,15 +8,16 @@ Development helpers. None of these ship to the Worker or the site.
 
 What it does:
 
-- `POST /chat/completions` and `POST /completions` read the JSON body and stream a canned, prompt-aware continuation as SSE, one word-ish token every ~60 ms, ending with `data: [DONE]`. A clinical-sounding prompt gets a clinical continuation, a question gets an answer-shaped one, and so on, so the UI looks alive.
+- `POST /chat/completions` and `POST /completions` read the JSON body and stream a canned, prompt-aware continuation as SSE, one word-ish token every ~60 ms (`MOCK_TOKEN_MS` overrides), ending with `data: [DONE]`. A clinical-sounding prompt gets a clinical continuation, a question gets an answer-shaped one, and so on, so the UI looks alive.
 - Between 10 and 20 tokens; `max_tokens: 1` sends exactly one token (and `finish_reason: "length"`).
-- If the body asks for `logprobs`, each token carries five alternatives with decaying logprobs (`-0.2, -1.9, -2.6, -3.3, -4.0`, chosen token first) in the chat shape (`choices[0].logprobs.content[0].top_logprobs`) or the legacy completions shape (`logprobs.tokens / token_logprobs / top_logprobs` maps).
+- A prefix the client already wrote is not repeated: if the chat request ends with an `assistant` message, or the completion prompt ends with the start of the canned text, the stream picks up where that text left off (so "Keep going", Pause/Resume and forks in chapter 4 read naturally). A prefix that used up the whole canned text moves on to the generic continuation.
+- If the body asks for `logprobs`, each token carries five alternatives, chosen token first, in the chat shape (`choices[0].logprobs.content[0].top_logprobs`) or the legacy completions shape (`logprobs.tokens / token_logprobs / top_logprobs` maps). The chosen token's logprob cycles by position through `-0.1, -0.6, -1.5, -2.3` (about 90%, 55%, 22%, 10%), so the confidence bands show green, amber and red, and the other four decay so the five shown never sum above 0.95 (the bar chart keeps an "everything else" remainder).
 - The final chunk carries `usage` with `prompt_tokens = ceil(promptChars / 4)`, `completion_tokens`, and `cost` computed from the model's price in `site/models.js` (unknown model ids use GPT-4o mini pricing).
 - `model: "mock/error"` responds `500` with an OpenRouter-style `{error}` body, for testing the Worker's error path.
 - `stream: false` returns a single JSON completion object instead of SSE.
 - `GET /` returns a small JSON health object; anything else is `404`.
 
-Options: `MOCK_PORT=8790 npm run mock` changes the port. From tests, `import { startMock } from '../tools/mock_openrouter.mjs'` and call `startMock(0, { tokenMs: 1 })` for an ephemeral, fast server (`tests/mock_openrouter.test.mjs` does this).
+Options: `MOCK_PORT=8790 npm run mock` changes the port; `MOCK_TOKEN_MS=400 npm run mock` slows the stream to one token every 400 ms, which is handy for trying Pause/Resume and "Stop all" by hand. From tests, `import { startMock } from '../tools/mock_openrouter.mjs'` and call `startMock(0, { tokenMs: 1 })` for an ephemeral, fast server (`tests/mock_openrouter.test.mjs` does this).
 
 Try it by hand:
 

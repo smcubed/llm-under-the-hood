@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { startMock } from '../tools/mock_openrouter.mjs';
+import { startMock, coveredTokens } from '../tools/mock_openrouter.mjs';
 import { parseSSE } from '../worker/src/openrouter.js';
 import { getModel, estimateCost } from '../site/models.js';
 
@@ -35,6 +35,15 @@ test('chat: streams prompt-aware tokens with 5 top_logprobs, usage.cost on the l
       assert.equal(lp.top_logprobs[0].token, c.choices[0].delta.content, 'chosen token is listed first');
       assert.equal(new Set(lp.top_logprobs.map(t => t.token)).size, 5, 'alternatives are distinct');
       for (let i = 1; i < 5; i++) assert.ok(lp.top_logprobs[i].logprob < lp.top_logprobs[i - 1].logprob, 'logprobs decay');
+    }
+    // Realistic probabilities: the chosen token's confidence varies from step to step (green, amber and red bands all
+    // appear) and the five shown alternatives never account for the whole distribution.
+    const chosen = tokenChunks.map(c => c.choices[0].logprobs.content[0].logprob);
+    assert.ok(new Set(chosen).size >= 3, `chosen logprobs vary: ${[...new Set(chosen)].join(', ')}`);
+    assert.ok(chosen.some(l => Math.exp(l) >= 0.6) && chosen.some(l => Math.exp(l) < 0.6 && Math.exp(l) >= 0.25) && chosen.some(l => Math.exp(l) < 0.25), 'all three bands occur');
+    for (const c of tokenChunks) {
+      const total = c.choices[0].logprobs.content[0].top_logprobs.reduce((s, t) => s + Math.exp(t.logprob), 0);
+      assert.ok(total <= 0.95, `shown probabilities leave a remainder (sum ${total.toFixed(3)})`);
     }
     const last = chunks.at(-1);
     assert.equal(last.choices[0].finish_reason, 'stop');
@@ -89,6 +98,40 @@ test('max_tokens: 1 sends exactly one token and finish_reason length', async () 
     const chunks2 = (await readSSE(res2)).slice(0, -1).map(e => JSON.parse(e));
     assert.equal(chunks2.filter(c => c.choices[0].text).length, 1);
   });
+});
+
+test('a prefix the client already wrote is not repeated: chat assistant message, completion prompt, and a used-up continuation', async () => {
+  await withMock(async (base) => {
+    const first = async (body, path = '/chat/completions') => {
+      const chunks = (await readSSE(await post(base, path, { ...body, stream: true }))).slice(0, -1).map(e => JSON.parse(e));
+      return chunks.filter(c => c.choices[0].delta?.content || c.choices[0].text).map(c => c.choices[0].delta?.content ?? c.choices[0].text);
+    };
+    const fresh = await first({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }] });
+    assert.deepEqual(fresh.slice(0, 3), [' a', ' CT', ' scan']);
+    const resumed = await first({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }, { role: 'assistant', content: ' a CT scan' }] });
+    assert.deepEqual(resumed.slice(0, 3), [' of', ' the', ' chest,'], 'picks up after the assistant prefix');
+    const forked = await first({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }, { role: 'assistant', content: ' an MRI' }] });
+    assert.deepEqual(forked.slice(0, 2), [' a', ' CT'], 'an unrelated prefix starts the canned text from the top');
+    const legacy = await first({ model: 'openai/gpt-3.5-turbo-instruct', prompt: `${chatPrompt} a CT scan of`, logprobs: 5 }, '/completions');
+    assert.deepEqual(legacy.slice(0, 2), [' the', ' chest,'], 'a completion prompt ending in canned text continues it');
+    const whole = ' a CT scan of the chest, which showed a small pulmonary nodule in the right upper lobe, and the team recommended follow-up imaging in three months to watch for any change.';
+    const exhausted = await first({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }, { role: 'assistant', content: whole }] });
+    assert.ok(exhausted.length >= 10, 'a used-up continuation moves on to the generic text instead of ending empty');
+    assert.equal(exhausted[0], ' the');
+    // A resumed stream continues the confidence cycle rather than restarting it at "green".
+    const res = await post(base, '/chat/completions', { model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }, { role: 'assistant', content: ' a' }], stream: true, logprobs: true, top_logprobs: 5 });
+    const chunks = (await readSSE(res)).slice(0, -1).map(e => JSON.parse(e));
+    assert.equal(chunks.find(c => c.choices[0].delta?.content).choices[0].logprobs.content[0].logprob, -0.6);
+  });
+});
+
+test('coveredTokens counts the leading canned tokens a prefix already ends with', () => {
+  const all = [' a', ' CT', ' scan'];
+  assert.equal(coveredTokens(all, ''), 0);
+  assert.equal(coveredTokens(all, 'The patient presented with a CT'), 2);
+  assert.equal(coveredTokens(all, ' a CT scan'), 3);
+  assert.equal(coveredTokens(all, ' an MRI'), 0);
+  assert.equal(coveredTokens(all, 'scan'), 0, 'must match whole tokens from the start of the canned text');
 });
 
 test('stream:false returns one JSON completion object', async () => {
