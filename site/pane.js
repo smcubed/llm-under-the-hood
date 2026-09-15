@@ -190,7 +190,12 @@ export function createOutputPane(root, {
   if (alternatives && !forkable) {
     // Read-only alternatives also show on hover; a hover-opened popover goes away when the pointer leaves the chip.
     chipsRoot.addEventListener('mouseover', (e) => { const chip = chipOf(e); if (chip && chip !== hoverChip && chip.getAttribute('aria-expanded') !== 'true') { hoverChip = chip; openAlternatives(chip); } });
-    chipsRoot.addEventListener('mouseout', (e) => { const chip = chipOf(e); if (chip && chip === hoverChip) { hoverChip = null; closePopover({ restoreFocus: false }); } });
+    chipsRoot.addEventListener('mouseout', (e) => {
+      const chip = chipOf(e);
+      if (!chip || chip !== hoverChip || (e.relatedTarget && chip.contains(e.relatedTarget))) return; // moving onto the chip's own space marker is not leaving
+      hoverChip = null;
+      closePopover({ restoreFocus: false });
+    });
   }
 
   // ---- API --------------------------------------------------------------------------------------------------------

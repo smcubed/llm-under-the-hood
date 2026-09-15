@@ -132,6 +132,8 @@ test('start → tokens appear → pause → resume sends the text so far as pref
   assert.equal(pop.querySelectorAll('button').length, 0);
   assert.deepEqual(pop.querySelectorAll('.fork-alt').map(r => r.querySelector('.fork-label').textContent), ['␣Because', '␣It']);
   assert.equal(pop.querySelectorAll('.fork-alt')[0].attributes['aria-current'], 'true');
+  chips()[0].dispatch('mouseout', { relatedTarget: chips()[0].querySelector('.sp') });
+  assert.ok(dom.document.body.querySelector('.popover'), 'moving onto the chip\'s own space marker keeps it open');
   chips()[0].dispatch('mouseout');
   assert.equal(dom.document.body.querySelector('.popover'), null);
   chips()[0].dispatch('click');
