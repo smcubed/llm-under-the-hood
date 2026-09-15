@@ -1,7 +1,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { installFakeDom } from './helpers/fake-dom.mjs';
-import { openPopover, closePopover, isPopoverOpen } from '../site/popover.js';
+import { openPopover, closePopover, closePopoverWithin, isPopoverOpen, popoverAnchor } from '../site/popover.js';
 import { el } from '../site/dom.js';
 
 const tick = () => new Promise(r => setTimeout(r, 0));
@@ -78,4 +78,30 @@ test('the popover is kept inside the viewport on the right', () => {
   a.rect = { left: 1000, top: 0, right: 1040, bottom: 20, width: 40, height: 20 };
   const pop = openPopover(a, el('p'));
   assert.equal(pop.style.left, `${1024 - 240 - 8}px`);
+});
+
+test('focus: false leaves focus where it was (hover-opened popovers must not steal it)', () => {
+  const a = anchor();
+  const pop = openPopover(a, el('p', { text: 'x' }), { focus: false });
+  assert.equal(dom.document.activeElement, dom.document.body);
+  assert.equal(pop.parentNode, dom.document.body);
+  assert.equal(a.attributes['aria-expanded'], 'true');
+  closePopover();
+  assert.equal(dom.document.activeElement, dom.document.body, 'nothing to restore');
+});
+
+test('popoverAnchor reports the open anchor; closePopoverWithin only closes a popover anchored inside the root', () => {
+  assert.equal(popoverAnchor(), null);
+  const paneA = el('div'), paneB = el('div');
+  dom.document.body.append(paneA, paneB);
+  const a = el('button', { text: 'a' });
+  paneB.append(a);
+  openPopover(a, el('p'));
+  assert.equal(popoverAnchor(), a);
+  closePopoverWithin(paneA);
+  assert.equal(isPopoverOpen(), true, 'another pane\'s reset leaves it alone');
+  closePopoverWithin(paneB);
+  assert.equal(isPopoverOpen(), false);
+  assert.equal(popoverAnchor(), null);
+  closePopoverWithin(paneB); // no-op when nothing is open
 });

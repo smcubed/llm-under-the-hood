@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatCost, formatLatency, formatTokens } from '../site/format.js';
+import { formatCost, formatLatency, formatTiming, formatTokens } from '../site/format.js';
 
 test('formatCost', () => {
   assert.equal(formatCost(0.0004), '$0.0004');
@@ -14,13 +14,25 @@ test('formatCost', () => {
   assert.equal(formatCost('x'), '');
 });
 
-test('formatLatency', () => {
-  assert.equal(formatLatency(850), '850 ms');
+test('formatLatency: seconds with one decimal, a floor under 50 ms', () => {
+  assert.equal(formatLatency(850), '0.9 s');
   assert.equal(formatLatency(1200), '1.2 s');
-  assert.equal(formatLatency(999.6), '1000 ms');
-  assert.equal(formatLatency(0), '0 ms');
+  assert.equal(formatLatency(999.6), '1.0 s');
+  assert.equal(formatLatency(400), '0.4 s');
+  assert.equal(formatLatency(49), '< 0.1 s');
+  assert.equal(formatLatency(0), '< 0.1 s');
+  assert.equal(formatLatency(12345), '12.3 s');
   assert.equal(formatLatency(-1), '');
   assert.equal(formatLatency(null), '');
+  assert.equal(formatLatency('x'), '');
+});
+
+test('formatTiming labels time to first token and total, or just the total when no token arrived', () => {
+  assert.equal(formatTiming({ firstTokenMs: 400, latencyMs: 1300 }), 'first token 0.4 s · total 1.3 s');
+  assert.equal(formatTiming({ firstTokenMs: null, latencyMs: 1300 }), 'took 1.3 s');
+  assert.equal(formatTiming({ firstTokenMs: 400, latencyMs: null }), '');
+  assert.equal(formatTiming({}), '');
+  assert.equal(formatTiming(null), '');
 });
 
 test('formatTokens', () => {

@@ -45,6 +45,16 @@ export function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+/**
+ * Replace `node`'s content with `kids`, with the same child rules as `el` (null/undefined/false skipped, arrays
+ * flattened, strings become text nodes). Use this instead of `node.replaceChildren(...)` whenever a child is
+ * conditional: the native method stringifies null into the text "null".
+ */
+export function setChildren(node, ...kids) {
+  node.replaceChildren();
+  appendChildren(node, kids);
+}
+
 /** Same as `el` for SVG elements (created in the SVG namespace). `class` is set via setAttribute for SVG. */
 export function svg(tag, attrs = {}, ...children) {
   const node = document.createElementNS(SVG_NS, tag);
@@ -99,8 +109,9 @@ export function tokenChip(token, i, extra = {}) {
 /**
  * A row of token chips that batches appends into a DocumentFragment flushed on the next animation frame (setTimeout 0
  * where requestAnimationFrame does not exist, as in tests), so a fast stream does not lay out once per token.
- * → { append(tokenText, { className, title, dataset, attrs }) → chip, reset(), flush(), count }
- * `attrs` are extra attributes passed through to `tokenChip` (e.g. tabindex, role).
+ * → { append(tokenText, { className, title, dataset, attrs }) → chip, insert(node), reset(), flush(), count }
+ * `attrs` are extra attributes passed through to `tokenChip` (e.g. tabindex, role). `insert` queues a plain node
+ * (a marker between chips) in order without numbering it.
  */
 export function chipRow(root) {
   const schedule = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 0);
@@ -109,15 +120,19 @@ export function chipRow(root) {
     scheduled = false;
     if (frag) { root.append(frag); frag = null; }
   };
+  const queue = (node) => {
+    if (!frag) frag = document.createDocumentFragment();
+    frag.append(node);
+    if (!scheduled) { scheduled = true; schedule(flush); }
+    return node;
+  };
   return {
     append(tokenText, { className, title, dataset, attrs } = {}) {
       const chip = tokenChip({ text: tokenText }, count, { class: className, title, dataset, ...(attrs || {}) });
       count += 1;
-      if (!frag) frag = document.createDocumentFragment();
-      frag.append(chip);
-      if (!scheduled) { scheduled = true; schedule(flush); }
-      return chip;
+      return queue(chip);
     },
+    insert: queue,
     reset() { frag = null; count = 0; root.replaceChildren(); },
     flush,
     get count() { return count; },

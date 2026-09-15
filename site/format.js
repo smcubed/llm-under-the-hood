@@ -11,13 +11,21 @@ export function formatCost(usd) {
   return `$${n.toFixed(n < 1 ? 3 : 2)}`;
 }
 
-/** Milliseconds → "850 ms" under a second, "1.2 s" from a second up; null/NaN → "". */
+/** Milliseconds → seconds with one decimal ("0.4 s", "1.3 s"); under 50 ms → "< 0.1 s"; null/NaN/negative → "". */
 export function formatLatency(ms) {
   if (ms === null || ms === undefined || ms === '') return '';
   const n = Number(ms);
   if (!Number.isFinite(n) || n < 0) return '';
-  if (n < 1000) return `${Math.round(n)} ms`;
-  return `${(n / 1000).toFixed(1)} s`;
+  if (n < 50) return '< 0.1 s';
+  return `${(Math.round(n / 100) / 10).toFixed(1)} s`; // round in tenths first: (0.85).toFixed(1) is "0.8" in binary floating point
+}
+
+/** Footer timing: "first token 0.4 s · total 1.3 s", or "took 1.3 s" when no token arrived; no total → "". */
+export function formatTiming(stats) {
+  const total = formatLatency(stats?.latencyMs);
+  if (!total) return '';
+  const first = formatLatency(stats?.firstTokenMs);
+  return first ? `first token ${first} · total ${total}` : `took ${total}`;
 }
 
 /** Usage → "12 in · 80 out" (missing counts are skipped); null → "". */

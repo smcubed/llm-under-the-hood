@@ -1,7 +1,7 @@
 /**
  * A streaming output pane shared by chapters 4, 5 and 6: one line of token chips (tinted by confidence), a live status
  * line, an optional "What it considered" side panel of mini bars, an inline error notice with Retry, an optional footer
- * (latency, tokens, cost), pause/resume/stop, and a popover on chips that lists the alternatives the model considered
+ * (time to first token and total, tokens, cost), pause/resume/stop, and a popover on chips that lists the alternatives the model considered
  * at that step (read-only, or forkable: pick one and keep writing from there).
  *
  *   const pane = createOutputPane(root, { getModel, getPrefixText, showConsidered, forkable, alternatives, footer, ... });
@@ -12,11 +12,11 @@
  * All rendering goes through el()/tokenChip(); no innerHTML. Pure helpers are tested in tests/pane.test.mjs.
  */
 import { withProbs, band } from './probs.js';
-import { el, chipRow, notice, setStatus, setLiveStatus } from './dom.js';
-import { openPopover, closePopover } from './popover.js';
+import { el, chipRow, notice, setChildren, setStatus, setLiveStatus } from './dom.js';
+import { openPopover, closePopover, closePopoverWithin, popoverAnchor } from './popover.js';
 import { request } from './stream.js';
 import { renderBars, formatPercent, tokenLabel } from './bars.js';
-import { formatCost, formatLatency, formatTokens } from './format.js';
+import { formatCost, formatTiming, formatTokens } from './format.js';
 
 export const STEP_TOP = 5;
 export const CONSIDERED_IDLE = 'Press "Keep going" to watch each step.';
@@ -59,6 +59,9 @@ export function toToken(ev) {
 
 // ---- The pane -----------------------------------------------------------------------------------------------------
 
+/** Monotonic milliseconds for the footer timings (performance.now where it exists, as it does in browsers and Node). */
+const now = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
+
 export function createOutputPane(root, {
   getModel = () => null,
   getPrefixText = (params) => params?.prompt ?? '',
@@ -92,16 +95,17 @@ export function createOutputPane(root, {
   const footTokens = el('span', { class: 'foot-item foot-tokens' });
   const footCost = el('span', { class: 'foot-item foot-cost' });
   const foot = footer ? el('p', { class: 'pane-foot muted small', hidden: true }, footLatency, footTokens, footCost) : null;
-  root.replaceChildren(body, errorSlot, foot);
+  setChildren(root, body, errorSlot, foot);
   root.classList.add('out-pane');
   const out = chipRow(chipsRoot);
 
   // ---- State ------------------------------------------------------------------------------------------------------
   let tokens = [];
   let phase = 'idle', finish = null, forkIndex = null;
-  let current = null, lastCtx = null, lastParams = null, startedAt = 0;
-  let stats = { latencyMs: null, usage: null, cost: null };
-  let hoverChip = null;
+  let current = null, lastCtx = null, lastParams = null, startedAt = 0, firstTokenAt = null;
+  const EMPTY_STATS = Object.freeze({ latencyMs: null, firstTokenMs: null, usage: null, cost: null });
+  let stats = EMPTY_STATS;
+  let hoverChip = null;   // the chip whose popover was opened by hovering (closes on mouseout); click-opened ones are "pinned"
 
   const changed = () => {
     out.flush(); // any chips still batched for the next frame land before the status changes
@@ -111,7 +115,7 @@ export function createOutputPane(root, {
 
   // ---- Rendering --------------------------------------------------------------------------------------------------
   const appendChip = (t, i) => {
-    if (i === forkIndex) out.append('forked here', { className: 'fork-marker', title: 'You picked a different token here', attrs: { role: 'note' } });
+    if (i === forkIndex) out.insert(el('span', { class: 'fork-marker', role: 'note', text: 'forked here' }));
     const hasAlts = Array.isArray(t.top) && t.top.length > 0 && (forkable || alternatives);
     out.append(t.text, {
       className: `out-tok band-${tokenBand(t)}${hasAlts ? (forkable ? ' can-fork' : ' has-alts') : ''}`,
@@ -141,7 +145,7 @@ export function createOutputPane(root, {
     if (!foot) return;
     const has = stats.latencyMs !== null || stats.usage || stats.cost !== null;
     foot.hidden = !has;
-    footLatency.textContent = formatLatency(stats.latencyMs);
+    footLatency.textContent = formatTiming(stats);
     footTokens.textContent = formatTokens(stats.usage);
     footCost.textContent = formatCost(stats.cost);
   };
@@ -161,7 +165,7 @@ export function createOutputPane(root, {
     api.setTokens(forkAt(tokens, i, altText), { forkIndex: i });
     if (lastCtx && lastParams) api.start(lastCtx, { ...lastParams, prefix: joinTokens(tokens) });
   };
-  const openAlternatives = (chip) => {
+  const openAlternatives = (chip, { hover = false } = {}) => {
     const i = Number(chip.dataset.i);
     const tok = tokens[i];
     if (!tok?.top) return;
@@ -175,26 +179,33 @@ export function createOutputPane(root, {
         onClick: () => fork(i, alt.text) }, ...label);
     });
     const list = el('div', { class: 'fork-list' }, el('p', { class: 'small muted fork-title', text: 'At this step it also considered:' }), ...rows);
-    openPopover(chip, list, { label: 'Other tokens it considered' });
+    openPopover(chip, list, { label: 'Other tokens it considered', focus: !hover });
+    hoverChip = hover ? chip : null;
   };
   const chipOf = (e) => { const chip = e.target.closest?.('.can-fork, .has-alts'); return chip && chipsRoot.contains(chip) ? chip : null; };
-  chipsRoot.addEventListener('click', (e) => { const chip = chipOf(e); if (chip) { hoverChip = null; openAlternatives(chip); } });
+  chipsRoot.addEventListener('click', (e) => { const chip = chipOf(e); if (chip) openAlternatives(chip); });
   chipsRoot.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const chip = chipOf(e);
     if (!chip) return;
     e.preventDefault();
-    hoverChip = null;
     openAlternatives(chip);
   });
   if (alternatives && !forkable) {
-    // Read-only alternatives also show on hover; a hover-opened popover goes away when the pointer leaves the chip.
-    chipsRoot.addEventListener('mouseover', (e) => { const chip = chipOf(e); if (chip && chip !== hoverChip && chip.getAttribute('aria-expanded') !== 'true') { hoverChip = chip; openAlternatives(chip); } });
+    // Read-only alternatives also show on hover, without taking focus; a hover-opened popover goes away when the
+    // pointer leaves the chip. A pinned (click/keyboard-opened) popover, in this pane or another, is left alone until
+    // the student dismisses it: a hover popover only lives while the pointer is on its chip, so any popover that is
+    // still open when the pointer reaches a different chip must be a pinned one.
+    chipsRoot.addEventListener('mouseover', (e) => {
+      const chip = chipOf(e);
+      if (!chip || popoverAnchor() !== null) return;
+      openAlternatives(chip, { hover: true });
+    });
     chipsRoot.addEventListener('mouseout', (e) => {
       const chip = chipOf(e);
       if (!chip || chip !== hoverChip || (e.relatedTarget && chip.contains(e.relatedTarget))) return; // moving onto the chip's own space marker is not leaving
       hoverChip = null;
-      closePopover({ restoreFocus: false });
+      if (popoverAnchor() === chip) closePopover({ restoreFocus: false });
     });
   }
 
@@ -210,17 +221,18 @@ export function createOutputPane(root, {
     /** Stream one request; tokens are appended to whatever is already in the pane (reset() first for a fresh start). */
     start(ctx, params) {
       current?.abort();
-      closePopover();
+      closePopoverWithin(root);
       lastCtx = ctx; lastParams = params;
       phase = 'streaming'; finish = null;
       errorSlot.replaceChildren();
-      stats = { latencyMs: null, usage: null, cost: null };
+      stats = EMPTY_STATS;
       paintFooter();
       promptSpan.textContent = getPrefixText(params) ?? '';
       syncPromptLayout();
-      startedAt = Date.now();
+      startedAt = now(); firstTokenAt = null;
       const my = request(ctx, params, {
         onToken: (ev) => {
+          if (firstTokenAt === null) firstTokenAt = now();
           const t = toToken(ev);
           tokens.push(t);
           appendChip(t, tokens.length - 1);
@@ -231,7 +243,7 @@ export function createOutputPane(root, {
           if (current === my) current = null;
           finish = done?.finish ?? 'truncated';
           phase = 'done';
-          stats = { latencyMs: Date.now() - startedAt, usage: done?.usage ?? null, cost: typeof done?.cost === 'number' ? done.cost : null };
+          stats = { latencyMs: now() - startedAt, firstTokenMs: firstTokenAt === null ? null : firstTokenAt - startedAt, usage: done?.usage ?? null, cost: typeof done?.cost === 'number' ? done.cost : null };
           paintFooter();
           onDone(done, params);
           changed();
@@ -269,9 +281,9 @@ export function createOutputPane(root, {
     /** Back to an empty pane. Also closes any popover anchored in it. */
     reset() {
       current?.abort(); current = null;
-      closePopover();
+      closePopoverWithin(root);
       tokens = []; phase = 'idle'; finish = null; forkIndex = null; lastCtx = null; lastParams = null;
-      stats = { latencyMs: null, usage: null, cost: null };
+      stats = EMPTY_STATS;
       out.reset();
       resetConsidered();
       errorSlot.replaceChildren();
@@ -281,7 +293,7 @@ export function createOutputPane(root, {
     },
     /** Replace the tokens (roll, fork) without a request; the pane returns to idle. */
     setTokens(list, { forkIndex: fi = null } = {}) {
-      closePopover();
+      closePopoverWithin(root);
       tokens = [...list]; forkIndex = fi;
       phase = 'idle'; finish = null;
       renderOutput();

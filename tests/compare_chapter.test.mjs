@@ -3,6 +3,8 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { installFakeDom } from './helpers/fake-dom.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
+import { sse, tok, doneEvent, hanging, installScriptedFetch } from './helpers/scripted-fetch.mjs';
+import { mountViz } from './helpers/mount-viz.mjs';
 import { createStore } from '../site/store.js';
 import { closePopover } from '../site/popover.js';
 import { MODELS } from '../site/models.js';
@@ -23,41 +25,24 @@ test('the plan\'s defaults and suggested prompts', () => {
 });
 
 // ---- Integration --------------------------------------------------------------------------------------------------
-const sse = (events) => new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(''), { status: 200 });
-const tok = (text, logprob, top) => ({ type: 'token', text, logprob, top });
-const done = (finish = 'stop') => ({ type: 'done', usage: { prompt: 11, completion: 2 }, cost: 0.0005, finish });
-const hanging = (events) => () => new Response(new ReadableStream({
-  start(c) { for (const e of events) c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`)); },
-}), { status: 200 });
+const done = (finish) => doneEvent(finish, { usage: { prompt: 11, completion: 2 }, cost: 0.0005 });
 
-let dom, calls, responses, realFetch;
+let dom, fetchStub, calls, script;
 beforeEach(() => {
   dom = installFakeDom();
-  calls = []; responses = new Map();
-  realFetch = globalThis.fetch;
-  globalThis.fetch = async (url, init) => {
-    const body = JSON.parse(init.body);
-    calls.push({ url, body });
-    const next = (responses.get(body.model) || []).shift();
-    if (!next) throw new Error(`test: no scripted response left for ${body.model}`);
-    return typeof next === 'function' ? next() : next;
-  };
+  fetchStub = installScriptedFetch();
+  ({ calls, script } = fetchStub);
 });
-afterEach(() => { closePopover(); globalThis.fetch = realFetch; dom.restore(); });
-const script = (model, res) => { if (!responses.has(model)) responses.set(model, []); responses.get(model).push(res); };
+afterEach(() => { closePopover(); fetchStub.restore(); dom.restore(); });
 
 function mountChapter(state = {}) {
-  const viz = dom.document.createElement('div'); viz.className = 'viz';
-  const root = dom.document.createElement('section'); root.append(viz);
-  dom.document.body.append(root);
+  const { root, viz, q, button } = mountViz(dom);
   const store = createStore({ prompt: 'The capital of Australia is', modelId: 'openai/gpt-4o-mini', system: '', runId: 0, results: {}, ...state });
   mount(root, store);
-  const q = (sel) => viz.querySelector(sel);
   const selects = () => viz.querySelectorAll('select');
   const panes = () => viz.querySelectorAll('.pane');
   const status = (pane) => pane.querySelector('.status').textContent;
   const chipsIn = (pane) => pane.querySelectorAll('.out-chips .chip');
-  const button = (text) => viz.querySelectorAll('button').find(b => b.textContent.trim() === text);
   const forModel = (id) => calls.filter(c => c.body.model === id);
   return { viz, store, q, selects, panes, status, chipsIn, button, forModel };
 }
@@ -76,6 +61,8 @@ test('pickers, prompt prefill, suggested chips and the system echo before any ru
   assert.equal(panes()[0].querySelector('.badge-open'), null);
   assert.equal(panes()[0].querySelector('.badge-year').textContent, '2023');
   assert.equal(panes()[0].querySelector('.pane-provider').textContent, 'OpenAI');
+  for (const p of panes()) assert.doesNotMatch(p.querySelector('.pane-head').textContent, /null|undefined/, 'skipped badges leave no text behind');
+  assert.equal(panes()[0].querySelector('.pane-head').textContent, 'ChatGPT 3.5 (2023)2023OpenAI');
 
   const field = q('textarea');
   assert.equal(field.value, 'The capital of Australia is');
@@ -156,6 +143,7 @@ test('Stop all marks streaming panes stopped; changing a picker shows the GPT-4 
   const pane = panes()[1];
   assert.equal(pane.querySelector('.pane-title').textContent, 'GPT-4 (2023)');
   assert.equal(pane.querySelector('.badge-cost').textContent, '$$$');
+  assert.doesNotMatch(pane.querySelector('.pane-head').textContent, /null/);
   assert.equal(pane.querySelector('.pane-cost-note').hidden, false);
   assert.equal(pane.querySelector('.pane-cost-note').textContent, GPT4_COST_NOTE);
   assert.equal(pane.querySelector('.pane-blurb').textContent, 'The first frontier model. Still expensive: about 100× the price of GPT-4o mini.');

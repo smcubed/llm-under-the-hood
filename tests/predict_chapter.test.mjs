@@ -3,42 +3,29 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { installFakeDom } from './helpers/fake-dom.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
+import { sse, tok, doneEvent, hanging, installScriptedFetch } from './helpers/scripted-fetch.mjs';
+import { mountViz } from './helpers/mount-viz.mjs';
 import { createStore } from '../site/store.js';
 import { mount, HEADING } from '../site/chapters/predict.js';
 import { closePopover } from '../site/popover.js';
 
-const sse = (events) => new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } });
-const tok = (text, logprob, top) => ({ type: 'token', text, logprob, top });
-const done = (finish = 'stop') => ({ type: 'done', usage: { prompt: 5, completion: 1 }, cost: 0.0001, finish });
+const done = (finish) => doneEvent(finish, { usage: { prompt: 5, completion: 1 }, cost: 0.0001 });
 const TOP = [{ text: ' CT', logprob: Math.log(0.6) }, { text: ' MRI', logprob: Math.log(0.3) }, { text: ' X', logprob: Math.log(0.05) }];
-/** A stream that sends its events and then hangs until the client aborts it. */
-const hanging = (events) => () => new Response(new ReadableStream({
-  start(c) { for (const e of events) c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`)); },
-}), { status: 200 });
 const tick = () => new Promise(r => setTimeout(r, 0));
 
-let dom, calls, responses, realFetch, realRandom;
+let dom, fetchStub, calls, script, realRandom;
 beforeEach(() => {
   dom = installFakeDom();
-  calls = []; responses = [];
-  realFetch = globalThis.fetch; realRandom = Math.random;
-  globalThis.fetch = async (url, init) => {
-    calls.push({ url, body: JSON.parse(init.body) });
-    const next = responses.shift();
-    if (!next) throw new Error('test: no scripted response left');
-    return typeof next === 'function' ? next() : next;
-  };
+  fetchStub = installScriptedFetch();
+  ({ calls, script } = fetchStub);
+  realRandom = Math.random;
 });
-afterEach(() => { closePopover(); globalThis.fetch = realFetch; Math.random = realRandom; dom.restore(); });
+afterEach(() => { closePopover(); fetchStub.restore(); Math.random = realRandom; dom.restore(); });
 
 function mountChapter(modelId = 'openai/gpt-4o-mini') {
-  const viz = dom.document.createElement('div'); viz.className = 'viz';
-  const root = dom.document.createElement('section'); root.append(viz);
-  dom.document.body.append(root);
+  const { root, viz, q, button } = mountViz(dom);
   const store = createStore({ prompt: 'The patient presented with', modelId, system: '', runId: 0, results: {} });
   mount(root, store);
-  const q = (sel) => viz.querySelector(sel);
-  const button = (text) => viz.querySelectorAll('button').find(b => b.textContent.trim() === text);
   const bigBars = () => viz.querySelectorAll('.bars:not(.mini-bars) .bar-row');
   const chips = () => viz.querySelectorAll('.out-chips .chip');
   const outStatus = () => q('.out-block .status').textContent;
@@ -51,7 +38,7 @@ test('idle until Run; the first call draws raw bars and publishes usage for the 
   assert.equal(q('.predict').hidden, true);
   assert.match(q('.placeholder').textContent, /Run it/);
 
-  responses.push(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
+  script(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
   store.set({ runId: 1 });
   assert.equal(q('.predict .status').textContent, 'Asking the model for its guesses…');
   await waitFor(() => bigBars().length === 4);
@@ -73,11 +60,12 @@ test('idle until Run; the first call draws raw bars and publishes usage for the 
   assert.equal(q('.out-prompt').textContent, 'The patient presented with');
   assert.equal(q('.out-line').classList.contains('is-completion'), false);
   assert.equal(viz.querySelectorAll('.out-chips .chip').length, 0);
+  assert.doesNotMatch(q('.out-pane').textContent, /null|undefined/, 'a pane without a footer renders no stray text');
 });
 
 test('slider rescales, roll picks and starts the output, keep going streams with the picked prefix, fork truncates and continues', async () => {
   const { viz, store, q, button, bigBars, chips, outStatus } = mountChapter();
-  responses.push(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
+  script(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
   store.set({ runId: 1 });
   await waitFor(() => bigBars().length === 4);
 
@@ -101,7 +89,7 @@ test('slider rescales, roll picks and starts the output, keep going streams with
   assert.equal(viz.querySelectorAll('.mini-bars .bar-row').length, 3, 'the side panel shows the alternatives');
 
   const stepTop = [{ text: ' scan', logprob: -0.05 }, { text: ' of', logprob: -3.2 }];
-  responses.push(sse([tok(' scan', -0.05, stepTop), tok(' showed', -2.0, null), done('length')]));
+  script(sse([tok(' scan', -0.05, stepTop), tok(' showed', -2.0, null), done('length')]));
   button('Keep going').dispatch('click');
   assert.equal(outStatus(), 'Writing…');
   assert.equal(button('Pause').disabled, false);
@@ -130,15 +118,18 @@ test('slider rescales, roll picks and starts the output, keep going streams with
   assert.deepEqual(alts.map(a => a.querySelector('.fork-label').textContent), ['␣scan', '␣of']);
   assert.equal(alts[0].attributes['aria-current'], 'true');
   assert.equal(alts[0].tagName, 'button');
-  responses.push(sse([tok(' the', -0.3, [{ text: ' the', logprob: -0.3 }]), done()]));
+  script(sse([tok(' the', -0.3, [{ text: ' the', logprob: -0.3 }]), done()]));
   alts[1].dispatch('click');
   assert.equal(dom.document.body.querySelector('.popover'), null);
-  await waitFor(() => outStatus() === 'Finished (stop)' && chips().length === 4);
+  await waitFor(() => outStatus() === 'Finished (stop)' && chips().length === 3);
   assert.equal(calls[2].body.prefix, ' MRI of');
   c = chips();
-  assert.deepEqual(c.map(x => x.textContent), ['␣MRI', 'forked here', '␣of', '␣the']);
-  assert.ok(c[1].classList.contains('fork-marker'));
-  assert.ok(c[2].classList.contains('band-unknown'), 'a forked-in token has no logprob of its own');
+  assert.deepEqual(c.map(x => x.textContent), ['␣MRI', '␣of', '␣the']);
+  const marker = q('.out-chips .fork-marker');
+  assert.equal(marker.textContent, 'forked here');
+  assert.equal(marker.classList.contains('chip'), false, 'the marker is a plain note, not a numbered chip');
+  assert.equal(marker.parentNode.children.indexOf(marker), 1, 'it sits between the kept token and the fork');
+  assert.ok(c[1].classList.contains('band-unknown'), 'a forked-in token has no logprob of its own');
 
   const toggle = q('input[type=checkbox]');
   toggle.checked = false; toggle.dispatch('change');
@@ -147,10 +138,10 @@ test('slider rescales, roll picks and starts the output, keep going streams with
 
 test('pause aborts and keeps tokens; resume continues from the current text', async () => {
   const { store, button, bigBars, chips, outStatus } = mountChapter();
-  responses.push(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
+  script(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
   store.set({ runId: 1 });
   await waitFor(() => bigBars().length === 4);
-  responses.push(hanging([tok(' a', -0.1, [{ text: ' a', logprob: -0.1 }])]));
+  script(hanging([tok(' a', -0.1, [{ text: ' a', logprob: -0.1 }])]));
   button('Keep going').dispatch('click');
   await waitFor(() => chips().length === 1);
   button('Pause').dispatch('click');
@@ -158,7 +149,7 @@ test('pause aborts and keeps tokens; resume continues from the current text', as
   assert.equal(chips().length, 1, 'tokens are kept');
   assert.ok(button('Resume'));
   assert.equal(button('Pause').disabled, true);
-  responses.push(sse([tok(' b', -0.2, null), done()]));
+  script(sse([tok(' b', -0.2, null), done()]));
   button('Resume').dispatch('click');
   await waitFor(() => outStatus() === 'Finished (stop)');
   assert.equal(calls[2].body.prefix, ' a');
@@ -168,10 +159,10 @@ test('pause aborts and keeps tokens; resume continues from the current text', as
 test('two Keep going clicks during a stream issue one request; roll while paused closes the popover and clears the error notice', async (t) => {
   t.mock.method(console, 'error', () => {});
   const { store, button, bigBars, chips, q } = mountChapter();
-  responses.push(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
+  script(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
   store.set({ runId: 1 });
   await waitFor(() => bigBars().length === 4);
-  responses.push(hanging([tok(' a', -0.1, [{ text: ' a', logprob: -0.1 }])]));
+  script(hanging([tok(' a', -0.1, [{ text: ' a', logprob: -0.1 }])]));
   button('Keep going').dispatch('click');
   button('Keep going').dispatch('click');
   await waitFor(() => chips().length === 1);
@@ -179,7 +170,7 @@ test('two Keep going clicks during a stream issue one request; roll while paused
   button('Pause').dispatch('click');
 
   // A failed step leaves a notice; opening a fork popover then rolling the dice clears both.
-  responses.push(sse([{ type: 'error', message: 'Provider hiccup.' }]));
+  script(sse([{ type: 'error', message: 'Provider hiccup.' }]));
   button('Step').dispatch('click');
   await waitFor(() => q('.error-slot .notice'));
   chips()[0].dispatch('click');
@@ -195,19 +186,19 @@ test('two Keep going clicks during a stream issue one request; roll while paused
 test('HTTP and stream errors show a notice whose Retry re-issues the last action; a new run ignores stale results', async (t) => {
   t.mock.method(console, 'error', () => {}); // the chapter logs each failed request; both failures here are scripted
   const { viz, store, q, button, bigBars, chips } = mountChapter();
-  responses.push(new Response(JSON.stringify({ message: 'The class budget for today is used up.' }), { status: 429 }));
+  script(new Response(JSON.stringify({ message: 'The class budget for today is used up.' }), { status: 429 }));
   store.set({ runId: 1 });
   await waitFor(() => q('.error-slot .notice'));
   assert.equal(q('.error-slot .notice').children[0].textContent, 'The class budget for today is used up.');
   assert.equal(bigBars().length, 0);
   assert.equal(button('Keep going').disabled, true, 'nothing to continue until the first call succeeds');
-  responses.push(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
+  script(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
   q('.error-slot .notice button').dispatch('click');
   await waitFor(() => bigBars().length === 4);
   assert.equal(q('.error-slot').children.length, 0);
   assert.equal(calls[1].body.maxTokens, 1, 'Retry re-issues the first call');
 
-  responses.push(sse([tok(' a', -0.1, null), { type: 'error', message: 'The model returned an error.' }]));
+  script(sse([tok(' a', -0.1, null), { type: 'error', message: 'The model returned an error.' }]));
   button('Step').dispatch('click');
   await waitFor(() => q('.error-slot .notice'));
   assert.equal(calls[2].body.maxTokens, 1);
@@ -216,11 +207,11 @@ test('HTTP and stream errors show a notice whose Retry re-issues the last action
 
   // A slow first call for run 2 that finishes after run 3 has started must not draw anything.
   let release;
-  responses.push(() => new Promise(r => { release = () => r(sse([tok(' late', -0.1, [{ text: ' late', logprob: -0.1 }]), done()])); }));
+  script(() => new Promise(r => { release = () => r(sse([tok(' late', -0.1, [{ text: ' late', logprob: -0.1 }]), done()])); }));
   store.set({ runId: 2 });
   await waitFor(() => calls.length === 4);
   assert.equal(viz.querySelectorAll('.out-chips .chip').length, 0, 'the new run cleared the output');
-  responses.push(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
+  script(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
   store.set({ runId: 3 });
   await waitFor(() => bigBars().length === 4 && store.get().results.predict?.runId === 3);
   release();
@@ -233,7 +224,7 @@ test('HTTP and stream errors show a notice whose Retry re-issues the last action
 
 test('a model without probabilities still makes the one-token call (publishing usage), shows the card, disables slider/roll/toggle, and writes; the card clears on the next run', async () => {
   const { store, q, button, chips } = mountChapter('anthropic/claude-haiku-4.5');
-  responses.push(sse([tok(' Sure', null, null), done()]));
+  script(sse([tok(' Sure', null, null), done()]));
   store.set({ runId: 1 });
   await waitFor(() => q('.nolog-card').hidden === false);
   assert.equal(calls.length, 1);
@@ -247,7 +238,7 @@ test('a model without probabilities still makes the one-token call (publishing u
   assert.equal(button('Keep going').disabled, false);
   assert.deepEqual(store.get().results.predict, { runId: 1, usage: { prompt: 5, completion: 1 }, cost: 0.0001, model: 'anthropic/claude-haiku-4.5' }, 'usage is published from the first call even without probabilities');
   assert.equal(chips().length, 0, 'the probe token is not shown as output');
-  responses.push(sse([tok(' Sure', null, null), tok(',', null, null), done()]));
+  script(sse([tok(' Sure', null, null), tok(',', null, null), done()]));
   button('Keep going').dispatch('click');
   await waitFor(() => chips().length === 2);
   assert.equal(calls[1].body.prefix, '');
@@ -256,7 +247,7 @@ test('a model without probabilities still makes the one-token call (publishing u
 
   // Switching to a model with probabilities: the stale card goes away and the bars come back.
   store.set({ modelId: 'openai/gpt-4o-mini' });
-  responses.push(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
+  script(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
   store.set({ runId: 2 });
   assert.equal(q('.nolog-card').hidden, true, 'the card is hidden as soon as the new run starts');
   await waitFor(() => q('.bars:not(.mini-bars) .bar-row'));
@@ -266,7 +257,7 @@ test('a model without probabilities still makes the one-token call (publishing u
 
 test('a completion model renders prompt and output as one line with the note', async () => {
   const { store, q, bigBars } = mountChapter('openai/gpt-3.5-turbo-instruct');
-  responses.push(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
+  script(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
   store.set({ runId: 1 });
   await waitFor(() => bigBars().length === 4);
   assert.ok(q('.out-line').classList.contains('is-completion'));

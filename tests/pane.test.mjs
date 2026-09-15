@@ -3,7 +3,8 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { installFakeDom } from './helpers/fake-dom.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
-import { closePopover } from '../site/popover.js';
+import { sse, tok, doneEvent, hanging, installScriptedFetch } from './helpers/scripted-fetch.mjs';
+import { closePopover, popoverAnchor } from '../site/popover.js';
 import { getModel } from '../site/models.js';
 import { createOutputPane, joinTokens, forkAt, tokenBand, statusText, toToken } from '../site/pane.js';
 
@@ -56,26 +57,15 @@ test('toToken normalizes a token event', () => {
 });
 
 // ---- Integration --------------------------------------------------------------------------------------------------
-const sse = (events) => new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(''), { status: 200 });
-const tok = (text, logprob, top) => ({ type: 'token', text, logprob, top });
-const done = (finish = 'stop') => ({ type: 'done', usage: { prompt: 12, completion: 3 }, cost: 0.0004, finish });
-const hanging = (events) => () => new Response(new ReadableStream({
-  start(c) { for (const e of events) c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`)); },
-}), { status: 200 });
+const done = (finish) => doneEvent(finish, { usage: { prompt: 12, completion: 3 }, cost: 0.0004 });
 
-let dom, calls, responses, realFetch;
+let dom, fetchStub, calls, script;
 beforeEach(() => {
   dom = installFakeDom();
-  calls = []; responses = [];
-  realFetch = globalThis.fetch;
-  globalThis.fetch = async (url, init) => {
-    calls.push({ url, body: JSON.parse(init.body) });
-    const next = responses.shift();
-    if (!next) throw new Error('test: no scripted response left');
-    return typeof next === 'function' ? next() : next;
-  };
+  fetchStub = installScriptedFetch();
+  ({ calls, script } = fetchStub);
 });
-afterEach(() => { closePopover(); globalThis.fetch = realFetch; dom.restore(); });
+afterEach(() => { closePopover(); fetchStub.restore(); dom.restore(); });
 
 const ctxOf = (current = () => true) => ({ signal: new AbortController().signal, isCurrent: current });
 const params = { model: 'openai/gpt-4o-mini', prompt: 'Why?', system: '', maxTokens: 80, topLogprobs: 3, temperature: 0.7, prefix: '' };
@@ -92,7 +82,7 @@ test('start → tokens appear → pause → resume sends the text so far as pref
   assert.equal(root.querySelector('.considered'), null);
   assert.equal(root.querySelector('.pane-foot').hidden, true);
 
-  responses.push(hanging([tok(' Because', -0.2, [{ text: ' Because', logprob: -0.2 }, { text: ' It', logprob: -2 }]), tok(' the', -0.9, null)]));
+  script(hanging([tok(' Because', -0.2, [{ text: ' Because', logprob: -0.2 }, { text: ' It', logprob: -2 }]), tok(' the', -0.9, null)]));
   pane.start(ctxOf(), params);
   assert.equal(pane.phase, 'streaming');
   assert.equal(status(), 'Writing…');
@@ -108,7 +98,7 @@ test('start → tokens appear → pause → resume sends the text so far as pref
   assert.equal(pane.phase, 'paused');
   assert.equal(status(), 'Paused');
   assert.equal(chips().length, 2);
-  responses.push(sse([tok(' sky', -0.3, null), done()]));
+  script(sse([tok(' sky', -0.3, null), done()]));
   pane.resume();
   await waitFor(() => pane.phase === 'done');
   assert.equal(calls.length, 2);
@@ -119,7 +109,8 @@ test('start → tokens appear → pause → resume sends the text so far as pref
   assert.equal(pane.text, ' Because the sky');
   const foot = root.querySelector('.pane-foot');
   assert.equal(foot.hidden, false);
-  assert.match(foot.querySelector('.foot-latency').textContent, /^\d+ ms$|^\d+\.\d s$/);
+  assert.match(foot.querySelector('.foot-latency').textContent, /^first token (< 0\.1|\d+\.\d) s · total (< 0\.1|\d+\.\d) s$/);
+  assert.ok(Number.isFinite(pane.stats.firstTokenMs) && pane.stats.firstTokenMs <= pane.stats.latencyMs, 'first-token time is measured and never exceeds the total');
   assert.equal(foot.querySelector('.foot-tokens').textContent, '12 in · 3 out');
   assert.equal(foot.querySelector('.foot-cost').textContent, '$0.0004');
   assert.deepEqual(pane.stats.usage, { prompt: 12, completion: 3 });
@@ -158,7 +149,7 @@ test('errors show a notice whose Retry resumes from the current text; stop() mar
   const chips = () => root.querySelectorAll('.out-chips .chip');
   assert.ok(root.querySelector('.considered'), 'the side panel is on by default');
 
-  responses.push(sse([tok(' Sure', null, null), { type: 'error', message: 'Provider failed.' }]));
+  script(sse([tok(' Sure', null, null), { type: 'error', message: 'Provider failed.' }]));
   pane.start(ctxOf(), params);
   await waitFor(() => pane.phase === 'error');
   assert.equal(chips().length, 1);
@@ -166,7 +157,7 @@ test('errors show a notice whose Retry resumes from the current text; stop() mar
   const n = root.querySelector('.error-slot .notice');
   assert.equal(n.children[0].textContent, 'Provider failed.');
   assert.match(root.querySelector('.considered p').textContent, /does not share/);
-  responses.push(sse([tok(',', null, null), done('length')]));
+  script(sse([tok(',', null, null), done('length')]));
   n.querySelector('button').dispatch('click');
   assert.equal(root.querySelector('.error-slot .notice'), null);
   await waitFor(() => pane.phase === 'done');
@@ -174,7 +165,7 @@ test('errors show a notice whose Retry resumes from the current text; stop() mar
   assert.equal(root.querySelector('.status').textContent, 'Cut off at the token limit');
 
   pane.reset();
-  responses.push(hanging([tok(' a', null, null)]));
+  script(hanging([tok(' a', null, null)]));
   pane.start(ctxOf(), params);
   await waitFor(() => chips().length === 1);
   pane.stop();
@@ -185,7 +176,7 @@ test('errors show a notice whose Retry resumes from the current text; stop() mar
   assert.equal(pane.finish, 'stopped', 'a second stop is a no-op');
 
   pane.reset();
-  responses.push(sse([tok(' late', null, null), done()]));
+  script(sse([tok(' late', null, null), done()]));
   pane.start(ctxOf(() => false), params);
   await waitFor(() => calls.length === 4);
   await new Promise(r => setTimeout(r, 0));
@@ -209,15 +200,78 @@ test('forkable panes fork themselves when no onFork is given, and setTokens/setP
   pane.setConfidence(false);
   assert.ok(root.querySelector('.out-line').classList.contains('confidence-off'));
 
-  responses.push(sse([tok(' seen', -0.2, null), done()]));
+  script(sse([tok(' seen', -0.2, null), done()]));
   pane.start(ctxOf(), { ...params, model: 'openai/gpt-3.5-turbo-instruct', prefix: ' was' });
   await waitFor(() => pane.phase === 'done');
   chips()[0].dispatch('keydown', { key: 'Enter', preventDefault() {} });
   const alts = dom.document.body.querySelector('.popover').querySelectorAll('.fork-alt');
   assert.equal(alts[1].tagName, 'button');
-  responses.push(sse([tok(' a', -0.2, null), done()]));
+  script(sse([tok(' a', -0.2, null), done()]));
   alts[1].dispatch('click');
-  await waitFor(() => pane.phase === 'done' && chips().length === 3);
+  await waitFor(() => pane.phase === 'done' && chips().length === 2);
   assert.equal(calls[1].body.prefix, ' had');
-  assert.deepEqual(chips().map(c => c.textContent), ['forked here', '␣had', '␣a']);
+  assert.deepEqual(chips().map(c => c.textContent), ['␣had', '␣a'], 'the fork marker is not a token chip');
+  const marker = root.querySelector('.out-chips .fork-marker');
+  assert.equal(marker.textContent, 'forked here');
+  assert.equal(marker.attributes.role, 'note');
+  assert.equal(marker.classList.contains('chip'), false);
+  assert.equal(marker.parentNode.children.indexOf(marker), 0, 'it sits where the fork happened');
+});
+
+test('a stream that ends without any token labels the footer with the total only', async () => {
+  const root = dom.document.createElement('div');
+  dom.document.body.append(root);
+  const pane = createOutputPane(root, { getModel: () => getModel('openai/gpt-4o-mini'), showConsidered: false, forkable: false, footer: true });
+  script(sse([done()]));
+  pane.start(ctxOf(), params);
+  await waitFor(() => pane.phase === 'done');
+  assert.match(root.querySelector('.foot-latency').textContent, /^took (< 0\.1|\d+\.\d) s$/);
+  assert.equal(pane.stats.firstTokenMs, null);
+});
+
+test('hover-opened alternatives do not take focus or replace a pinned (clicked) popover; reset only closes a popover anchored in that pane', async () => {
+  const rootA = dom.document.createElement('div'), rootB = dom.document.createElement('div');
+  dom.document.body.append(rootA, rootB);
+  const opts = { getModel: () => getModel('openai/gpt-4o-mini'), showConsidered: false, forkable: false, alternatives: true };
+  const paneA = createOutputPane(rootA, opts), paneB = createOutputPane(rootB, opts);
+  const alts = [{ text: ' a', logprob: -0.2 }, { text: ' b', logprob: -2 }];
+  script(sse([tok(' a', -0.2, alts), done()]));
+  script(sse([tok(' a', -0.2, alts), done()]));
+  paneA.start(ctxOf(), params);
+  paneB.start(ctxOf(), params);
+  await waitFor(() => paneA.phase === 'done' && paneB.phase === 'done');
+  const chipA = rootA.querySelector('.out-chips .chip'), chipB = rootB.querySelector('.out-chips .chip');
+
+  chipA.dispatch('mouseover');
+  assert.equal(popoverAnchor(), chipA);
+  assert.equal(dom.document.activeElement, dom.document.body, 'a hover popover does not steal focus');
+  chipA.dispatch('mouseout');
+  assert.equal(popoverAnchor(), null);
+
+  chipB.dispatch('click');
+  assert.equal(popoverAnchor(), chipB);
+  assert.equal(dom.document.activeElement, dom.document.body.querySelector('.popover'), 'a clicked popover takes focus');
+  chipA.dispatch('mouseover');
+  assert.equal(popoverAnchor(), chipB, 'hovering elsewhere does not replace a pinned popover');
+  chipA.dispatch('mouseout');
+  assert.equal(popoverAnchor(), chipB, 'and leaving does not close it');
+  chipB.dispatch('mouseout');
+  assert.equal(popoverAnchor(), chipB);
+  paneA.reset();
+  assert.equal(popoverAnchor(), chipB, 'resetting another pane leaves it alone');
+  paneB.reset();
+  assert.equal(popoverAnchor(), null);
+
+  // Once a pinned popover was dismissed (Escape), hover works again.
+  script(sse([tok(' a', -0.2, alts), done()]));
+  paneB.start(ctxOf(), params);
+  await waitFor(() => paneB.phase === 'done');
+  const chipB2 = rootB.querySelector('.out-chips .chip');
+  chipB2.dispatch('click');
+  dom.document.dispatch('keydown', { key: 'Escape', preventDefault() {} });
+  assert.equal(popoverAnchor(), null);
+  chipA.dispatch('mouseover');
+  assert.equal(popoverAnchor(), null, 'chip A belongs to a reset pane and has no token behind it');
+  chipB2.dispatch('mouseover');
+  assert.equal(popoverAnchor(), chipB2, 'hover opens again after the pinned one was dismissed');
 });

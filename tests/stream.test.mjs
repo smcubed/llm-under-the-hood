@@ -4,23 +4,16 @@ import assert from 'node:assert/strict';
 import { createStore } from '../site/store.js';
 import { createRun } from '../site/run.js';
 import { request, anySignal } from '../site/stream.js';
+import { sse, tok, doneEvent, installScriptedFetch } from './helpers/scripted-fetch.mjs';
 
-const sse = (events) => new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(''), { status: 200 });
-const tok = (text) => ({ type: 'token', text, logprob: -0.1, top: null });
-const DONE = { type: 'done', usage: { prompt: 3, completion: 2 }, cost: 0.00001, finish: 'stop' };
+const DONE = doneEvent();
 
-let calls, responses, realFetch;
+let fetchStub, calls, script;
 beforeEach(() => {
-  calls = []; responses = [];
-  realFetch = globalThis.fetch;
-  globalThis.fetch = async (url, init) => {
-    calls.push({ url, body: JSON.parse(init.body), signal: init.signal });
-    const next = responses.shift();
-    if (!next) throw new Error('test: no scripted response left');
-    return typeof next === 'function' ? next() : next;
-  };
+  fetchStub = installScriptedFetch();
+  ({ calls, script } = fetchStub);
 });
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(() => { fetchStub.restore(); });
 
 function runCtx(store) {
   let ctx = null;
@@ -36,7 +29,7 @@ test('delivers token events then done; the fetch carries a combined signal', asy
   const store = createStore({ runId: 1 });
   const ctx = runCtx(store)();
   const { log, handlers } = record();
-  responses.push(sse([tok('a'), tok('b'), DONE]));
+  script(sse([tok('a'), tok('b'), DONE]));
   const h = request(ctx, { model: 'm', prompt: 'p', maxTokens: 5 }, handlers);
   await h.done;
   assert.deepEqual(log, [['token', 'a'], ['token', 'b'], ['done', 'stop']]);
@@ -49,11 +42,11 @@ test('HTTP errors report the server message with fromStream=false; stream errors
   const store = createStore({ runId: 1 });
   const ctx = runCtx(store)();
   const a = record();
-  responses.push(new Response(JSON.stringify({ message: 'Budget used up.' }), { status: 429 }));
+  script(new Response(JSON.stringify({ message: 'Budget used up.' }), { status: 429 }));
   await request(ctx, { model: 'm', prompt: 'p' }, a.handlers).done;
   assert.deepEqual(a.log, [['error', 'Budget used up.', false]]);
   const b = record();
-  responses.push(sse([tok('a'), { type: 'error', message: 'Provider failed.' }]));
+  script(sse([tok('a'), { type: 'error', message: 'Provider failed.' }]));
   await request(ctx, { model: 'm', prompt: 'p' }, b.handlers).done;
   assert.deepEqual(b.log, [['token', 'a'], ['error', 'Provider failed.', true]]);
 });
@@ -63,7 +56,7 @@ test('abort() silences everything after it, including the error', async () => {
   const ctx = runCtx(store)();
   const { log, handlers } = record();
   let release;
-  responses.push(() => new Promise(r => { release = () => r(sse([tok('late'), DONE])); }));
+  script(() => new Promise(r => { release = () => r(sse([tok('late'), DONE])); }));
   const h = request(ctx, { model: 'm', prompt: 'p' }, handlers);
   h.abort();
   release();
@@ -77,7 +70,7 @@ test('a new runId makes the previous request stale: no callbacks, and the fetch 
   const get = runCtx(store);
   const { log, handlers } = record();
   let release;
-  responses.push(() => new Promise(r => { release = () => r(sse([tok('late'), DONE])); }));
+  script(() => new Promise(r => { release = () => r(sse([tok('late'), DONE])); }));
   const h = request(get(), { model: 'm', prompt: 'p' }, handlers);
   store.set({ runId: 2 });
   assert.equal(calls[0].signal.aborted, true);
@@ -88,12 +81,12 @@ test('a new runId makes the previous request stale: no callbacks, and the fetch 
 
 test('a plain ctx without isCurrent works; a ctx whose isCurrent flips to false drops the done', async () => {
   const { log, handlers } = record();
-  responses.push(sse([tok('a'), DONE]));
+  script(sse([tok('a'), DONE]));
   await request({ signal: new AbortController().signal }, { model: 'm', prompt: 'p' }, handlers).done;
   assert.deepEqual(log, [['token', 'a'], ['done', 'stop']]);
   let current = true;
   const b = record();
-  responses.push(sse([tok('a'), DONE]));
+  script(sse([tok('a'), DONE]));
   await request({ isCurrent: () => current }, { model: 'm', prompt: 'p' }, { ...b.handlers, onToken: (ev) => { b.log.push(['token', ev.text]); current = false; } }).done;
   assert.deepEqual(b.log, [['token', 'a']]);
 });
@@ -112,4 +105,42 @@ test('anySignal aborts when any input aborts, with or without AbortSignal.any', 
   const real = AbortSignal.any;
   AbortSignal.any = undefined;
   try { check(); } finally { AbortSignal.any = real; }
+});
+
+test('aborting only the run signal (a plain ctx without isCurrent) silences onError and onDone', async () => {
+  const run = new AbortController();
+  const { log, handlers } = record();
+  let release;
+  script(() => new Promise(r => { release = () => r(sse([tok('late'), DONE])); }));
+  const h = request({ signal: run.signal }, { model: 'm', prompt: 'p' }, handlers);
+  run.abort();
+  release();
+  await h.done;
+  assert.deepEqual(log, [], 'neither the abort error nor a late done reaches the handlers');
+  assert.equal(calls[0].signal.aborted, true);
+});
+
+test('anySignal fallback removes every listener once one input aborts, and adds none when an input is already aborted', () => {
+  const fakeSignal = (aborted = false) => {
+    const s = { aborted, reason: undefined, listeners: new Set() };
+    s.addEventListener = (type, fn) => { if (type === 'abort') s.listeners.add(fn); };
+    s.removeEventListener = (type, fn) => { if (type === 'abort') s.listeners.delete(fn); };
+    s.abort = (reason) => { s.aborted = true; s.reason = reason; for (const fn of [...s.listeners]) fn(); };
+    return s;
+  };
+  const real = AbortSignal.any;
+  AbortSignal.any = undefined;
+  try {
+    const a = fakeSignal(), b = fakeSignal(), c = fakeSignal();
+    const s = anySignal([a, b, c]);
+    assert.deepEqual([a, b, c].map(x => x.listeners.size), [1, 1, 1]);
+    b.abort('why');
+    assert.equal(s.aborted, true);
+    assert.equal(s.reason, 'why');
+    assert.deepEqual([a, b, c].map(x => x.listeners.size), [0, 0, 0], 'no listener is left behind on any input');
+    const d = fakeSignal(), pre = fakeSignal(true), e = fakeSignal();
+    const s2 = anySignal([d, pre, e]);
+    assert.equal(s2.aborted, true);
+    assert.deepEqual([d, pre, e].map(x => x.listeners.size), [0, 0, 0], 'an already-aborted input means no listeners at all');
+  } finally { AbortSignal.any = real; }
 });

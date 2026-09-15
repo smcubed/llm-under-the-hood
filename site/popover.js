@@ -1,9 +1,10 @@
 /**
  * One popover at a time, anchored below an element. Escape and a pointer press outside close it; focus returns to the
- * anchor when it was inside the popover. The anchor gets aria-expanded; the popover is role="dialog" and re-anchors on
+ * anchor when the popover took it on open (`focus: true`, the default) and still held it. The anchor gets aria-expanded; the popover is role="dialog" and re-anchors on
  * window resize. The outside-press listener is attached on a `setTimeout(0)` so the pointer event that opened the
  * popover (still dispatching when `openPopover` runs) cannot close it in the same breath.
- *   openPopover(anchorEl, contentEl, { label }) → popover element;  closePopover({ restoreFocus });  isPopoverOpen()
+ *   openPopover(anchorEl, contentEl, { label, focus }) → popover element   (focus: false for hover-opened popovers)
+ *   closePopover({ restoreFocus });  closePopoverWithin(root);  isPopoverOpen();  popoverAnchor()
  */
 let current = null;
 
@@ -15,7 +16,7 @@ function place(pop, anchorEl) {
   pop.style.left = `${left}px`;
 }
 
-export function openPopover(anchorEl, contentEl, { label = 'Details' } = {}) {
+export function openPopover(anchorEl, contentEl, { label = 'Details', focus = true } = {}) {
   closePopover();
   const pop = document.createElement('div');
   pop.className = 'popover';
@@ -30,7 +31,7 @@ export function openPopover(anchorEl, contentEl, { label = 'Details' } = {}) {
   const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); closePopover(); } };
   const onPointer = (e) => { if (!pop.contains(e.target) && !anchorEl.contains(e.target)) closePopover({ restoreFocus: false }); };
   const onResize = () => place(pop, anchorEl);
-  const entry = { pop, anchorEl, onKey, onPointer, onResize, armed: false, timer: null };
+  const entry = { pop, anchorEl, onKey, onPointer, onResize, tookFocus: focus, armed: false, timer: null };
   document.addEventListener('keydown', onKey);
   window.addEventListener('resize', onResize);
   entry.timer = setTimeout(() => {
@@ -40,13 +41,13 @@ export function openPopover(anchorEl, contentEl, { label = 'Details' } = {}) {
     entry.armed = true;
   }, 0);
   current = entry;
-  pop.focus({ preventScroll: true });
+  if (focus) pop.focus({ preventScroll: true });
   return pop;
 }
 
 export function closePopover({ restoreFocus = true } = {}) {
   if (!current) return;
-  const { pop, anchorEl, onKey, onPointer, onResize, armed, timer } = current;
+  const { pop, anchorEl, onKey, onPointer, onResize, tookFocus, armed, timer } = current;
   current = null;
   if (timer !== null) clearTimeout(timer);
   document.removeEventListener('keydown', onKey);
@@ -55,7 +56,15 @@ export function closePopover({ restoreFocus = true } = {}) {
   const hadFocus = pop.contains(document.activeElement) || document.activeElement === document.body;
   pop.remove();
   anchorEl.setAttribute('aria-expanded', 'false');
-  if (restoreFocus && hadFocus && anchorEl.isConnected) anchorEl.focus({ preventScroll: true });
+  if (restoreFocus && tookFocus && hadFocus && anchorEl.isConnected) anchorEl.focus({ preventScroll: true });
 }
 
 export function isPopoverOpen() { return current !== null; }
+
+/** The element the open popover is anchored to, or null. */
+export function popoverAnchor() { return current?.anchorEl ?? null; }
+
+/** Close the popover only if its anchor is inside `root` (so one pane's reset cannot close another pane's popover). */
+export function closePopoverWithin(root, opts) {
+  if (current && root?.contains(current.anchorEl)) closePopover(opts);
+}

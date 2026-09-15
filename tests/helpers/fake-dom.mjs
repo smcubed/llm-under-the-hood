@@ -67,8 +67,8 @@ function* walk(node) {
 }
 
 function adopt(parent, kid) {
-  if (kid === null || kid === undefined) return;
-  if (typeof kid === 'string' || typeof kid === 'number') kid = { nodeType: 3, textContent: String(kid), parentNode: null };
+  // As in a browser: append(null) inserts the text "null", append(undefined) the text "undefined".
+  if (kid === null || kid === undefined || typeof kid === 'string' || typeof kid === 'number') kid = { nodeType: 3, textContent: String(kid), parentNode: null };
   if (kid.nodeType === 11) { const moved = kid.children.splice(0); for (const k of moved) adopt(parent, k); return; }
   if (kid.parentNode) kid.parentNode.children = kid.parentNode.children.filter(c => c !== kid);
   kid.parentNode = parent;

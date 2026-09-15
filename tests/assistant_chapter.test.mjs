@@ -3,6 +3,8 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { installFakeDom } from './helpers/fake-dom.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
+import { sse, tok, doneEvent, hanging, installScriptedFetch } from './helpers/scripted-fetch.mjs';
+import { mountViz } from './helpers/mount-viz.mjs';
 import { createStore } from '../site/store.js';
 import { closePopover } from '../site/popover.js';
 import { AUTOCOMPLETE_MODEL, DEFAULT_MODEL } from '../site/models.js';
@@ -32,42 +34,23 @@ test('presetFor maps a system text back to its chip; the preset texts are the pl
 });
 
 // ---- Integration --------------------------------------------------------------------------------------------------
-const sse = (events) => new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(''), { status: 200 });
-const tok = (text, logprob, top) => ({ type: 'token', text, logprob, top });
-const done = (finish = 'stop') => ({ type: 'done', usage: { prompt: 9, completion: 2 }, cost: 0.00003, finish });
-const hanging = (events) => () => new Response(new ReadableStream({
-  start(c) { for (const e of events) c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`)); },
-}), { status: 200 });
+const done = (finish) => doneEvent(finish, { usage: { prompt: 9, completion: 2 }, cost: 0.00003 });
 
-let dom, calls, responses, realFetch;
+let dom, fetchStub, calls, script;
 beforeEach(() => {
   dom = installFakeDom();
-  calls = []; responses = new Map();
-  realFetch = globalThis.fetch;
-  // Responses are scripted per model id so the two concurrent panes cannot race for the wrong one.
-  globalThis.fetch = async (url, init) => {
-    const body = JSON.parse(init.body);
-    calls.push({ url, body });
-    const queue = responses.get(body.model) || [];
-    const next = queue.shift();
-    if (!next) throw new Error(`test: no scripted response left for ${body.model}`);
-    return typeof next === 'function' ? next() : next;
-  };
+  fetchStub = installScriptedFetch(); // responses are scripted per model id so the two concurrent panes cannot race for the wrong one
+  ({ calls, script } = fetchStub);
 });
-afterEach(() => { closePopover(); globalThis.fetch = realFetch; dom.restore(); });
-const script = (model, res) => { if (!responses.has(model)) responses.set(model, []); responses.get(model).push(res); };
+afterEach(() => { closePopover(); fetchStub.restore(); dom.restore(); });
 
 function mountChapter(state = {}) {
-  const viz = dom.document.createElement('div'); viz.className = 'viz';
-  const root = dom.document.createElement('section'); root.append(viz);
-  dom.document.body.append(root);
+  const { root, viz, q, button } = mountViz(dom);
   const store = createStore({ prompt: 'What is the first-line treatment for hypertension?', modelId: 'anthropic/claude-haiku-4.5', system: '', runId: 0, results: {}, ...state });
   mount(root, store);
-  const q = (sel) => viz.querySelector(sel);
   const panes = () => viz.querySelectorAll('.pane');
   const chipsIn = (pane) => pane.querySelectorAll('.out-chips .chip').map(c => c.textContent);
   const radio = (key) => viz.querySelector(`input[type=radio][value=${key}]`);
-  const button = (text) => viz.querySelectorAll('button').find(b => b.textContent.trim() === text);
   const forModel = (id) => calls.filter(c => c.body.model === id);
   return { viz, store, q, panes, chipsIn, radio, button, forModel };
 }

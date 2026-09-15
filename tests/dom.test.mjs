@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { el, svg, displayToken, chipClass, debounce, tokenChip, notice, setStatus, setLiveStatus, chipRow } from '../site/dom.js';
+import { el, svg, displayToken, chipClass, debounce, tokenChip, notice, setStatus, setLiveStatus, chipRow, setChildren } from '../site/dom.js';
 import { installFakeDom, fakeNode } from './helpers/fake-dom.mjs';
 
 let dom;
@@ -176,4 +176,29 @@ test('chipRow batches appends into one flush and reset clears everything', async
   row.flush();
   assert.equal(root.children.length, 1);
   assert.equal(root.children[0].className, 'chip chip-1', 'numbering restarts after reset');
+  const note = el('span', { class: 'fork-marker', text: 'forked here' });
+  row.insert(note);
+  row.append('z');
+  row.flush();
+  assert.deepEqual(root.children.slice(1).map(c => c.className), ['fork-marker', 'chip chip-2'], 'insert places a plain node in order without numbering it');
+});
+
+test('the fake DOM stringifies null and undefined children like a browser does', () => {
+  const node = el('div');
+  node.replaceChildren(el('b', { text: 'a' }), null, undefined);
+  assert.equal(node.textContent, 'anullundefined');
+  const frag = dom.document.createDocumentFragment();
+  frag.append(null);
+  assert.equal(frag.children[0].textContent, 'null');
+});
+
+test('setChildren replaces the content and skips null, undefined and false children, flattening arrays', () => {
+  const node = el('div', {}, 'old');
+  const b = el('b', { text: 'b' });
+  setChildren(node, null, 'a', [b, undefined, [false, 'c']]);
+  assert.equal(node.children.length, 3);
+  assert.equal(node.textContent, 'abc');
+  setChildren(node);
+  assert.equal(node.children.length, 0);
+  assert.equal(node.textContent, '');
 });

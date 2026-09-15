@@ -8,7 +8,7 @@
  */
 import { LIMITS, getModel } from '../models.js';
 import { buildModelSelect } from '../model-select.js';
-import { el } from '../dom.js';
+import { el, setChildren } from '../dom.js';
 import { createOutputPane } from '../pane.js';
 
 export const DEFAULT_PICKS = Object.freeze(['openai/gpt-3.5-turbo', 'anthropic/claude-haiku-4.5', 'meta-llama/llama-3.3-70b-instruct']);
@@ -22,7 +22,7 @@ export const MAX_TOKENS = 120;
 export const TOP = 5;
 export const TEMPERATURE = 0.7;
 export const GPT4_COST_NOTE = 'about 100× the cost of GPT-4o mini';
-export const IDLE_NOTE = 'Pick up to three models, check the prompt, and press "Compare".';
+export const IDLE_NOTE = 'Pick three models, check the prompt, and press "Compare".';
 export const ECHO_CHARS = 60;
 
 // ---- Pure helpers (tested in tests/compare_chapter.test.mjs) -------------------------------------------------------
@@ -83,7 +83,7 @@ export function mount(root, store) {
   viz.replaceChildren(controls, idle, grid);
 
   // ---- State ------------------------------------------------------------------------------------------------------
-  let touched = false, localRun = 0, controller = null, ran = false;
+  let touched = false, localRun = 0, controller = null;
 
   function renderButtons() {
     const streaming = slots.some(s => s.pane.phase === 'streaming');
@@ -92,7 +92,7 @@ export function mount(root, store) {
   }
   const renderHead = (slot) => {
     const m = slot.model;
-    slot.head.replaceChildren(
+    setChildren(slot.head,
       el('h4', { class: 'pane-title', text: m.label }),
       el('span', { class: 'badge badge-year', text: String(m.year) }),
       el('span', { class: 'pane-provider', text: m.provider }),
@@ -115,7 +115,6 @@ export function mount(root, store) {
     controller = new AbortController();
     const ctx = { signal: controller.signal, isCurrent: () => localRun === myRun };
     const system = store.get().system || '';
-    ran = true;
     idle.hidden = true;
     grid.hidden = false;
     for (const slot of slots) {
@@ -153,6 +152,6 @@ export function mount(root, store) {
   const initial = store.get();
   setEcho(initial.system);
   field.value = initial.prompt || '';
-  grid.hidden = !ran;
+  grid.hidden = true; // the panes appear on the first Compare
   syncPrompt();
 }
