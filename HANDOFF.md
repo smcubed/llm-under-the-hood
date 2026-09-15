@@ -63,13 +63,12 @@ No redeploy is needed. The Worker picks up secrets on the next request.
 Same prompt, "The patient presented with chest pain and", once per model. Ten minutes total
 and well under a dollar.
 
-- [ ] gpt-3.5-turbo-instruct: bars appear; the continuation reads as a sentence continuation, not an answer; Fork works.
+- [x] gpt-3.5-turbo-instruct: bars appear; the continuation reads as a sentence continuation, not an answer; Fork works. (Verified 2026-09-15 in chapter 5's left pane, after fixing a real bug — see "Known limits.")
 - [ ] gpt-3.5-turbo, gpt-4, gpt-4o-mini, llama-3.3-70b: bars appear; confidence coloring present; token counts and cost shown.
 - [ ] claude-haiku-4.5, gpt-5-mini, gemini-3.5-flash-lite: the "does not share probabilities" card appears; streaming works.
 - [ ] Compare (chapter 6): three panes stream at the same time; costs match the OpenRouter activity page within rounding.
 - [ ] Budget message: from the project folder run `npx wrangler deploy --var GPT4_DAILY_BUDGET_USD:0.0001`, run GPT-4 once, confirm the pane shows "Today's class budget for GPT-4 is used up", then run `npm run deploy` to restore the real value.
 - [ ] Wrong passcode 11 times within a minute shows "Too many attempts. Wait a minute and try again."
-- [ ] gpt-3.5-turbo-instruct: bars come from the legacy `/completions` logprobs shape, and the footer cost matches OpenRouter (it reports `usage.cost`).
 - [ ] gpt-3.5-turbo, gpt-4, gpt-4o-mini, llama-3.3-70b: each token chip lines up with the streamed text (chat logprobs alignment). Some Llama providers drop logprobs; if Llama shows no bars, note it here.
 - [ ] gpt-5-mini produces non-empty output with the max tokens control at 1, 80, and 120 (it runs with `reasoning.effort: minimal`).
 - [ ] Model ids exist on https://openrouter.ai/models: `google/gemini-3.5-flash-lite`, `anthropic/claude-haiku-4.5`, `openai/gpt-5-mini`. If one is missing, swap it in `site/models.js`.
@@ -152,6 +151,7 @@ Fields in `site/models.js`, one line each:
 - GPT-4 costs about 100 times GPT-4o mini per token. That is why it has its own $1 cap.
 - Budgets can overshoot by one request: the Worker reserves the estimated cost before calling the provider and settles up after, so a request that starts just under the cap finishes.
 - The repository is public. That is fine: secrets live only in Cloudflare and in the ignored `.dev.vars` file. Do not commit `.dev.vars`.
+- OpenRouter has no separate legacy "completions" endpoint. Every model, including old completion-only ones like gpt-3.5-turbo-instruct, is called through the same endpoint the chat models use, wrapped in a single message. This was found the hard way on 2026-09-15 (the first real run of chapter 5) and is now fixed and tested; it is the reason the Worker logs the actual provider error to `wrangler tail` when a request is rejected outright, never just a status code.
 
 ## Verified on 2026-09-14 (local, mock upstream)
 

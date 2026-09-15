@@ -58,12 +58,13 @@ test('buildUpstream: no logprobs fields for models that lack them', () => {
   const { body } = buildUpstream(v, 'x');
   assert.equal('logprobs' in body, false); assert.equal('top_logprobs' in body, false);
 });
-test('buildUpstream: completion model → /completions with prompt+prefix, system prepended', () => {
+test('buildUpstream: completion model → /chat/completions too (OpenRouter has no separate legacy endpoint), one user message folding system+prompt+prefix, boolean logprobs', () => {
   const v = { ...base, model: getModel('openai/gpt-3.5-turbo-instruct'), prefix: ' chest', system: 'Note:' };
   const { url, body } = buildUpstream(v, 'https://o/api/v1');
-  assert.equal(url, 'https://o/api/v1/completions');
-  assert.equal(body.prompt, 'Note:\n\nThe patient presented with chest');
-  assert.equal(body.logprobs, 5); assert.equal('messages' in body, false);
+  assert.equal(url, 'https://o/api/v1/chat/completions');
+  assert.deepEqual(body.messages, [{ role: 'user', content: 'Note:\n\nThe patient presented with chest' }]);
+  assert.equal('prompt' in body, false);
+  assert.equal(body.logprobs, true); assert.equal(body.top_logprobs, 5);
 });
 
 test('parseSSE splits a buffer into data payloads and keeps the remainder', () => {
@@ -104,12 +105,6 @@ test('normalize chat without logprobs → token events with null logprob/top, es
   const done = ev.at(-1);
   assert.ok(Math.abs(done.cost - (12 * 1 + 4 * 5) / 1e6) < 1e-12);
 });
-test('normalize completion with logprobs → top from object map, finish length', async () => {
-  const ev = await collect('completion_logprobs.sse', 'openai/gpt-3.5-turbo-instruct');
-  assert.equal(ev[0].text, ' chest'); assert.equal(ev[0].logprob, -0.3);
-  assert.deepEqual(ev[0].top, [{ text: ' chest', logprob: -0.3 }, { text: ' CT', logprob: -1.5 }, { text: ' a', logprob: -2.2 }]);
-  assert.equal(ev.at(-1).finish, 'length');
-});
 async function collectText(text, modelId, opts) {
   const out = []; for await (const e of normalizeUpstream(new Response(text).body, getModel(modelId), opts)) out.push(e);
   return out;
@@ -136,7 +131,7 @@ test('normalize: a chat chunk with delta.content and an empty logprobs.content e
   const ev = await collectText(body, 'openai/gpt-4o-mini');
   assert.deepEqual(ev.filter(e => e.type === 'token'), [{ type: 'token', text: ' CT', logprob: null, top: null }]);
 });
-test('normalize: the completion endpoint also accepts a chat-shaped logprobs.content[] (OpenRouter may normalize)', async () => {
+test('normalize: a former "completion" model is parsed the same chat-shaped way as any other (no legacy shape exists any more)', async () => {
   const body = 'data: {"choices":[{"text":" chest","logprobs":{"content":[{"token":" chest","logprob":-0.3,"top_logprobs":[{"token":" chest","logprob":-0.3},{"token":" CT","logprob":-1.5}]}]},"finish_reason":null}]}\n\ndata: [DONE]\n\n';
   const ev = await collectText(body, 'openai/gpt-3.5-turbo-instruct');
   assert.equal(ev[0].text, ' chest'); assert.equal(ev[0].logprob, -0.3);

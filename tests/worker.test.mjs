@@ -103,10 +103,11 @@ test('client disconnect mid-stream still drains upstream and records the real co
 });
 test('generate passes auth header, url and body to upstream', async () => {
   let seen; const env = makeEnv({ fetchUpstream: async (url, init) => { seen = { url, init }; return new Response('data: [DONE]\n\n', { status: 200 }); } });
+  // Every model, "completion"-style ones included, goes to /chat/completions: OpenRouter has no separate legacy route.
   await handle(post('/api/generate', { model: 'openai/gpt-3.5-turbo-instruct', prompt: 'hi' }, { cookie: await cookie(env) }), env, ctx);
-  assert.equal(seen.url, 'https://up/api/v1/completions');
+  assert.equal(seen.url, 'https://up/api/v1/chat/completions');
   assert.equal(seen.init.headers.Authorization, 'Bearer k');
-  assert.equal(JSON.parse(seen.init.body).prompt, 'hi');
+  assert.deepEqual(JSON.parse(seen.init.body).messages, [{ role: 'user', content: 'hi' }]);
 });
 test('invalid body → 400 with plain message', async () => {
   const env = makeEnv();

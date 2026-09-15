@@ -39,19 +39,21 @@ function applyUpstream(model, body) {
 
 export function buildUpstream(v, baseUrl) {
   const m = v.model;
-  // Always stream upstream so one code path handles every model; the router collects events when the client asked for stream:false.
+  // OpenRouter's current API has one endpoint for every model, chat- or completion-style: there is no separate
+  // legacy /completions route any more (confirmed 2026-09-15 against openrouter.ai/openapi.json, and the hard way,
+  // against a live "Missing required parameter: 'prompt'" 400 from a real gpt-3.5-turbo-instruct call). A
+  // completion model is called the same way, wrapped in a single user message.
   const common = { model: m.id, max_tokens: v.maxTokens, temperature: v.temperature, stream: true, usage: { include: true } };
-  if (m.endpoint === 'completion') {
-    // A completion model continues text by construction: the prefix is simply appended to the prompt.
-    const prompt = (v.system ? v.system + '\n\n' : '') + v.prompt + v.prefix;
-    const body = { ...common, prompt };
-    if (m.logprobs && v.topLogprobs > 0) body.logprobs = v.topLogprobs;
-    return { url: `${baseUrl}/completions`, body: applyUpstream(m, body) };
-  }
   const messages = [];
-  if (v.system) messages.push({ role: 'system', content: v.system });
-  messages.push({ role: 'user', content: v.prompt });
-  if (v.prefix) messages.push({ role: 'assistant', content: v.prefix }, { role: 'user', content: CONTINUE_INSTRUCTION });
+  if (m.endpoint === 'completion') {
+    // No chat structure: fold system + prompt + prefix into one turn so the model just continues raw text, the
+    // way a completions call would. Fork/resume append straight into this same text, not a fresh turn.
+    messages.push({ role: 'user', content: (v.system ? v.system + '\n\n' : '') + v.prompt + v.prefix });
+  } else {
+    if (v.system) messages.push({ role: 'system', content: v.system });
+    messages.push({ role: 'user', content: v.prompt });
+    if (v.prefix) messages.push({ role: 'assistant', content: v.prefix }, { role: 'user', content: CONTINUE_INSTRUCTION });
+  }
   const body = { ...common, messages };
   if (m.logprobs && v.topLogprobs > 0) { body.logprobs = true; body.top_logprobs = v.topLogprobs; }
   return { url: `${baseUrl}/chat/completions`, body: applyUpstream(m, body) };
@@ -66,19 +68,6 @@ function chatTokens(choice) {
   const lp = choice.logprobs?.content;
   if (Array.isArray(lp) && lp.length) return fromChatLogprobs(lp);
   return plainToken(choice.delta?.content);
-}
-
-function completionTokens(choice) {
-  const lp = choice.logprobs;
-  if (lp && Array.isArray(lp.tokens) && lp.tokens.length) {
-    return lp.tokens.map((tok, i) => ({
-      type: 'token', text: tok, logprob: lp.token_logprobs?.[i] ?? null,
-      top: lp.top_logprobs?.[i] ? Object.entries(lp.top_logprobs[i]).map(([text, logprob]) => ({ text, logprob })).sort((a, b) => b.logprob - a.logprob) : null,
-    }));
-  }
-  // OpenRouter may normalize the legacy shape to the chat one.
-  if (Array.isArray(lp?.content) && lp.content.length) return fromChatLogprobs(lp.content);
-  return plainToken(choice.text);
 }
 
 const UPSTREAM_ERROR_MESSAGES = {
@@ -111,7 +100,7 @@ export async function* normalizeUpstream(stream, model, { promptChars = 0 } = {}
     const out = [];
     for (const choice of json.choices || []) {
       if (choice.finish_reason) finish = choice.finish_reason;
-      const toks = model.endpoint === 'completion' ? completionTokens(choice) : chatTokens(choice);
+      const toks = chatTokens(choice);
       tokenCount += toks.length;
       out.push(...toks);
     }
