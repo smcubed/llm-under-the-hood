@@ -40,7 +40,7 @@ function wireSessionExpiry(syncRun) {
     syncRun();
     showGate();
     const error = $('#gate-error');
-    error.textContent = 'Your session expired. Enter the class passcode again.';
+    error.textContent = 'Your session expired. Enter the passcode again.';
     error.hidden = false;
   });
 }
