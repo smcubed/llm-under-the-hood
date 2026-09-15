@@ -1,6 +1,6 @@
 import { MODELS, estimateCost } from '../../site/models.js';
 import { validateGenerate } from './validate.js';
-import { buildUpstream, normalizeUpstream } from './openrouter.js';
+import { buildUpstream, normalizeUpstream, readExcerpt } from './openrouter.js';
 import { issueSession, verifySession, sessionCookieHeader, readCookie, passcodeMatches } from './session.js';
 
 const json = (status, obj, headers = {}) => new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } });
@@ -80,8 +80,10 @@ export async function handle(request, env, ctx) {
     }
     if (!up.ok || !up.body) {
       refund();
-      up.body?.cancel().catch(() => {});
-      console.error('generate: upstream returned', up.status);
+      // Never forwarded to the client, but the actual provider error is invaluable when a real model rejects a
+      // request for a reason the mock never exercised (a dropped/renamed param, a model-specific limit, etc.).
+      const excerpt = await readExcerpt(up.body, 2000);
+      console.error('generate: upstream returned', up.status, excerpt);
       const headers = {};
       const retryAfter = up.headers.get('retry-after');
       if (up.status === 429 && retryAfter) headers['retry-after'] = retryAfter;

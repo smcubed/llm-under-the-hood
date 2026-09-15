@@ -146,16 +146,35 @@ test('upstream failure → 502 with plain message, no upstream body leaked', asy
   const r = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, { cookie: await cookie(env) }), env, ctx);
   assert.equal(r.status, 502); const j = await r.json(); assert.doesNotMatch(j.message, /secret detail/);
 });
-test('upstream !ok → its body is cancelled, and a 429 Retry-After is forwarded', async () => {
-  let cancelled = false;
-  const body = new ReadableStream({ pull(c) { c.enqueue(new TextEncoder().encode('{"error":"x"}')); c.close(); }, cancel() { cancelled = true; } });
+test('upstream !ok → the real provider error is logged server-side (never to the client), and a 429 Retry-After is forwarded', async (t) => {
+  const errSpy = t.mock.method(console, 'error', () => {});
+  const body = new ReadableStream({ pull(c) { c.enqueue(new TextEncoder().encode('{"error":"logprobs is not supported for this model"}')); c.close(); } });
   const env = makeEnv({ fetchUpstream: async () => new Response(body, { status: 429, headers: { 'retry-after': '17' } }) });
   const r = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, { cookie: await cookie(env) }), env, ctx);
   assert.equal(r.status, 502); assert.equal(r.headers.get('retry-after'), '17');
-  assert.equal(cancelled, true);
+  const j = await r.json(); assert.doesNotMatch(j.message, /logprobs is not supported/);
+  const call = errSpy.mock.calls.find(c => c.arguments[0] === 'generate: upstream returned');
+  assert.ok(call, 'expected the upstream status and body excerpt to be logged');
+  assert.equal(call.arguments[1], 429);
+  assert.match(call.arguments[2], /logprobs is not supported/);
+
   const env2 = makeEnv({ fetchUpstream: async () => new Response('x', { status: 500 }) });
   const r2 = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, { cookie: await cookie(env2) }), env2, ctx);
   assert.equal(r2.headers.get('retry-after'), null);
+});
+test('upstream !ok with an oversized body → excerpt is capped and the remainder is abandoned', async (t) => {
+  const errSpy = t.mock.method(console, 'error', () => {});
+  let cancelled = false, pulls = 0;
+  const body = new ReadableStream({
+    pull(c) { pulls += 1; c.enqueue(new TextEncoder().encode('x'.repeat(500))); },
+    cancel() { cancelled = true; },
+  });
+  const env = makeEnv({ fetchUpstream: async () => new Response(body, { status: 400 }) });
+  const r = await handle(post('/api/generate', { model: 'openai/gpt-4o-mini', prompt: 'hi' }, { cookie: await cookie(env) }), env, ctx);
+  assert.equal(r.status, 502);
+  assert.equal(cancelled, true);
+  const call = errSpy.mock.calls.find(c => c.arguments[0] === 'generate: upstream returned');
+  assert.ok(call.arguments[2].length <= 2000);
 });
 test('stream:false returns collected events as JSON, but still streams from upstream', async () => {
   let sentBody; const base = makeEnv();

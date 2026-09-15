@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { buildUpstream, normalizeUpstream, parseSSE, CONTINUE_INSTRUCTION } from '../worker/src/openrouter.js';
+import { buildUpstream, normalizeUpstream, parseSSE, CONTINUE_INSTRUCTION, readExcerpt } from '../worker/src/openrouter.js';
 import { getModel } from '../site/models.js';
 
 const fx = (n) => readFile(new URL(`./fixtures/${n}`, import.meta.url), 'utf8');
@@ -218,4 +218,36 @@ test('normalize cancels the upstream reader when the consumer stops iterating ea
   });
   for await (const e of normalizeUpstream(stream, getModel('openai/gpt-4o-mini'))) { if (e.type === 'token') break; }
   assert.equal(cancelled, true);
+});
+
+test('readExcerpt reads a short body fully and leaves it to close naturally (no cancel)', async () => {
+  let cancelled = false;
+  const stream = new ReadableStream({
+    start(c) { c.enqueue(new TextEncoder().encode('{"error":"bad request: this model does not support logprobs"}')); c.close(); },
+    cancel() { cancelled = true; },
+  });
+  const text = await readExcerpt(stream, 2000);
+  assert.match(text, /does not support logprobs/);
+  assert.equal(cancelled, false);
+});
+
+test('readExcerpt caps an oversized body and cancels the remainder', async () => {
+  // A pull-based source that keeps producing (like a live network stream) rather than a source that has
+  // already called close(): once a source has closed, cancelling afterward is a spec-defined no-op, so this
+  // has to still be "open" at the moment we bail out for the cancellation to actually reach the source.
+  let cancelled = false;
+  let pulls = 0;
+  const stream = new ReadableStream({
+    pull(c) { pulls += 1; c.enqueue(new TextEncoder().encode('x'.repeat(50))); },
+    cancel() { cancelled = true; },
+  });
+  const text = await readExcerpt(stream, 100);
+  assert.equal(text.length, 100);
+  assert.equal(cancelled, true);
+  assert.ok(pulls < 10, 'should stop pulling once the cap is hit, not drain an endless source');
+});
+
+test('readExcerpt on a missing body returns an empty string', async () => {
+  assert.equal(await readExcerpt(null), '');
+  assert.equal(await readExcerpt(undefined), '');
 });

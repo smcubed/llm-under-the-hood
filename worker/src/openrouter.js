@@ -4,6 +4,27 @@ import { parseSSE } from '../../site/sse.js';
 // One copy of the SSE splitter serves both the Worker and the browser client (site/api.js).
 export { parseSSE };
 
+/** Reads up to `maxBytes` of a response body for server-side diagnostics (never sent to the client), then
+ *  abandons the rest. Returns '' for a null/undefined stream. A body that ends on its own within the cap is
+ *  left to close naturally; only an oversized body is explicitly cancelled. */
+export async function readExcerpt(stream, maxBytes = 2000) {
+  if (!stream) return '';
+  const reader = stream.getReader();
+  const dec = new TextDecoder();
+  let text = '', total = 0, natural = false;
+  try {
+    while (total < maxBytes) {
+      const { value, done } = await reader.read();
+      if (done) { natural = true; break; }
+      total += value.byteLength;
+      text += dec.decode(value, { stream: true });
+    }
+  } catch { /* return what we have */ }
+  if (!natural) { try { await reader.cancel(); } catch { /* already errored/closed */ } }
+  try { reader.releaseLock(); } catch { /* already released by cancel */ }
+  return text.slice(0, maxBytes);
+}
+
 /** Chat models do not reliably continue a trailing assistant message (OpenAI ones tend to start over), so a resumed or
  *  forked run sends the text so far as the assistant turn and then asks, in a user turn, for the continuation only. */
 export const CONTINUE_INSTRUCTION = 'Continue your previous message exactly where it left off. Do not repeat any of it and do not add a preamble. Output only the continuation.';
