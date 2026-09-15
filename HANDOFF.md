@@ -69,6 +69,12 @@ and well under a dollar.
 - [ ] Compare (chapter 6): three panes stream at the same time; costs match the OpenRouter activity page within rounding.
 - [ ] Budget message: from the project folder run `npx wrangler deploy --var GPT4_DAILY_BUDGET_USD:0.0001`, run GPT-4 once, confirm the pane shows "Today's class budget for GPT-4 is used up", then run `npm run deploy` to restore the real value.
 - [ ] Wrong passcode 11 times within a minute shows "Too many attempts. Wait a minute and try again."
+- [ ] gpt-3.5-turbo-instruct: bars come from the legacy `/completions` logprobs shape, and the footer cost matches OpenRouter (it reports `usage.cost`).
+- [ ] gpt-3.5-turbo, gpt-4, gpt-4o-mini, llama-3.3-70b: each token chip lines up with the streamed text (chat logprobs alignment). Some Llama providers drop logprobs; if Llama shows no bars, note it here.
+- [ ] gpt-5-mini produces non-empty output with the max tokens control at 1, 80, and 120 (it runs with `reasoning.effort: minimal`).
+- [ ] Model ids exist on https://openrouter.ai/models: `google/gemini-3.5-flash-lite`, `anthropic/claude-haiku-4.5`, `openai/gpt-5-mini`. If one is missing, swap it in `site/models.js`.
+- [ ] Keep going and Fork on gpt-4o-mini and Claude Haiku continue the sentence rather than starting over.
+- [ ] Three compare streams at once from one classroom network stay under `PER_IP_PER_MINUTE` (no "Too many requests from this network").
 
 Write the date and anything odd under "Verified" at the bottom of this file.
 
@@ -120,6 +126,7 @@ Fields in `site/models.js`, one line each:
 - `open`: `true` for open-weights models (they get their own group in the picker).
 - `bucket`: `default` shares the $5 budget; `gpt4` uses the separate $1 budget. Use `gpt4` for anything else expensive.
 - `price`: USD per million tokens, `in` and `out`, copied from the OpenRouter model page. Used to estimate cost when the provider does not report it.
+- `upstream` (optional): `{ omit: [...], extra: {...} }`. Request fields to drop and fields to add for that model only. GPT-5 mini uses it to drop `temperature` and add `reasoning: { effort: 'minimal' }`.
 
 ## Reading spend
 
@@ -127,13 +134,17 @@ Fields in `site/models.js`, one line each:
 - The Worker keeps only today's and yesterday's totals per bucket, to enforce the caps. It is not a log.
 - When the shared budget is hit, students see "Today's class budget is used up. Please come back tomorrow."
   When only the GPT-4 budget is hit: "Today's class budget for GPT-4 is used up. Try a cheaper model or come back tomorrow."
-- Budgets reset at midnight UTC, which is 5 pm Pacific in winter and 4 pm in summer.
+- Budgets reset at midnight UTC, which is 4 pm Pacific in winter (PST) and 5 pm in summer (PDT).
   A class that runs past that hour gets a fresh budget mid-session.
 - To raise a cap for one day: `npx wrangler deploy --var DAILY_BUDGET_USD:10`, then `npm run deploy` later to go back.
 
 ## Known limits
 
-- Claude, Gemini, and GPT-5 models do not share probabilities. Chapters 4 through 6 show a card saying so and stream text only.
+- Claude, Gemini, and GPT-5 models do not share probabilities. Chapter 4 shows a card saying so; chapters 5 and 6 do not show the card, they just stream the text without confidence tints or alternatives.
+- Chat continuation (Keep going, Step, Resume, Fork) works by sending the text so far as the model's own message and asking it to continue that message. Chat models usually comply, but may occasionally repeat or rephrase a few words. GPT-3.5 Instruct continues exactly by construction, because its prompt simply ends with the text so far.
+- GPT-5 mini is a reasoning model: the Worker drops `temperature` for it and asks for minimal reasoning effort (see `upstream` in `site/models.js`), otherwise it can spend its whole token allowance thinking and return no text. The temperature slider still rescales the bars locally but has no effect on that model's own sampling.
+- "No IPs stored" has one small exception: the per-network rate limit and the wrong-passcode limit keep hashed-address keys with request timestamps in Durable Object storage for up to 60 seconds, then drop them.
+- `GET /api/models` returns the contents of `site/models.js` (ids, labels, prices) without a passcode. It is harmless: the same file ships to every browser as part of the site.
 - Token counts for Llama, Claude, and Gemini are approximate. The page shows OpenAI's o200k tokenizer with a note; only OpenAI models are exact.
 - The 2-D word map (chapter 2) is a flattening of 384 dimensions from a small sentence-embedding model (all-MiniLM-L6-v2). It is not the LLM's own embedding space, and the caption says so.
 - The attention arcs (chapter 3) come from GPT-2 on two fixed sentences, computed once and stored. They are not live.

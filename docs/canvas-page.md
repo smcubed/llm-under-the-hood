@@ -31,8 +31,9 @@ fictional and safe to use.
    or "levothyroxine") and note how many tokens it becomes. Try a common English word of the
    same length for comparison. Why might a model handle drug names worse than everyday words?
 
-2. **Fork a sentence.** In chapter 4, run the default prompt, then click a token in the output
-   and pick a different alternative. Do this three times from the same step, so you get three
+2. **Fork a sentence.** In chapter 4, pick GPT-3.5 Instruct or GPT-4o mini (both show their
+   probabilities), run the default prompt, then click a token in the output and pick a
+   different alternative. Do this three times from the same step, so you get three
    different sentences. In two sentences, describe how the meaning changed and how confident
    the model was in each choice (the percentages next to each alternative).
 
@@ -49,6 +50,6 @@ most. Submit on this page's assignment by the end of the week. This is graded fo
 ### If something goes wrong
 
 - "That passcode is not right": check for a typo; the passcode is case-sensitive.
-- "Today's class budget is used up": the shared budget resets at 5 pm Pacific (4 pm in summer). Try again then, or the next day.
+- "Today's class budget is used up": the shared budget resets at 4 pm Pacific (5 pm in summer). Try again then, or the next day.
 - "Too many requests from this network": several people on the same Wi-Fi hit the limit at once. Wait a minute.
 - Anything else: send me a screenshot.
