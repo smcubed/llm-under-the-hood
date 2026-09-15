@@ -5,3 +5,13 @@ A passcode-gated web explainer for students. You type a short prompt (up to 200 
 To run it locally: `npm install && cp .dev.vars.example .dev.vars && npm run mock` in one terminal (a local stand-in for OpenRouter), then `npm run dev` in another. Open `http://127.0.0.1:8787` and use the passcode `test`. Run the tests with `npm test`. Deploy with `npm run deploy` (requires a logged-in wrangler and the `OPENROUTER_API_KEY`, `PASSCODE`, and `COOKIE_SECRET` secrets set on the Worker).
 
 Design notes and the chapter-by-chapter content live in [the design document](docs/plans/2026-09-14-llm-under-the-hood-design.md); the build plan is in [the implementation plan](docs/plans/2026-09-14-llm-under-the-hood.md).
+
+## Links
+
+| What | Where |
+|---|---|
+| Live site | https://llm-under-the-hood.smcgrath.workers.dev |
+| Repository | https://github.com/smcubed/llm-under-the-hood |
+| Handoff notes (secrets, changing models and budgets, reading spend) | [HANDOFF.md](HANDOFF.md) |
+
+The Worker answers every `/api/*` request with `500 {"message":"Server is not configured."}` until the three secrets (`OPENROUTER_API_KEY`, `PASSCODE`, `COOKIE_SECRET`) are set; the static pages serve fine before that. Deploy with `npm run deploy` (`wrangler deploy`); the first deploy created the `LedgerObject` Durable Object via the `v1` migration.
