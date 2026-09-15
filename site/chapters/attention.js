@@ -4,8 +4,9 @@
  * No API calls; the only async work is the data fetch and the tokenizer load. Follows the chapter contract in tokens.js.
  */
 import { loadTokenizer, tokenize } from '../tokenize.js';
-import { el, svg, tokenChip, chipClass, displayToken, debounce, notice, prefersReducedMotion } from '../dom.js';
-import { pickText, FALLBACK_EXAMPLE } from './tokens.js';
+import { getModel } from '../models.js';
+import { el, svg, tokenChip, chipClass, displayToken, debounce, notice, prefersReducedMotion, setStatus } from '../dom.js';
+import { pickText, FALLBACK_EXAMPLE, EXAMPLE_NOTE } from './tokens.js';
 
 const DATA_URL = 'data/attention.json';
 export const ARC_H = 110;          // SVG height above the token row
@@ -75,7 +76,7 @@ function measureCenters(stage, chips) {
 /** A scrollable stage: an SVG for arcs sitting directly above a non-wrapping token row. */
 function makeStage(label) {
   const arcs = svg('svg', { class: 'arcs', height: ARC_H, 'aria-hidden': 'true' });
-  const row = el('div', { class: 'arc-row', role: 'list', 'aria-label': label });
+  const row = el('div', { class: 'arc-row', role: 'group', 'aria-label': label });
   const stage = el('div', { class: 'arc-stage' }, arcs, row);
   const scroll = el('div', { class: 'arc-scroll' }, stage);
   const fit = () => { const w = Math.max(1, stage.getBoundingClientRect().width || 1); arcs.setAttribute('width', w); arcs.setAttribute('viewBox', `0 0 ${w} ${ARC_H}`); };
@@ -93,9 +94,10 @@ export function mount(root, store) {
   const showRow = el('div', { class: 'show-row' });
   const captionA = el('p', { class: 'caption' });
   const statusA = el('div', { class: 'status muted small', role: 'status' });
+  const tabpanel = el('div', { role: 'tabpanel', id: 'attn-real-panel' }, A.scroll, showRow, captionA);
   const panelA = el('div', { class: 'panel', id: 'attn-real' },
     el('h3', { class: 'panel-title', text: 'Two sentences, real weights' }),
-    statusA, tablist, A.scroll, showRow, captionA,
+    statusA, tablist, tabpanel,
     el('p', { class: 'muted small', text: MODEL_NOTE }));
 
   let data = null, sentenceIndex = 0, highlightIndex = 0, chipsA = [];
@@ -130,24 +132,28 @@ export function mount(root, store) {
       const { leadingSpace, text: shown } = displayToken(text);
       const marker = leadingSpace ? el('span', { class: 'sp', 'aria-hidden': 'true', text: '␣' }) : null;
       if (froms.has(i)) {
-        return el('button', { type: 'button', class: `chip ${chipClass(i)} is-from`, role: 'listitem', 'aria-pressed': 'false',
+        return el('button', { type: 'button', class: `chip ${chipClass(i)} is-from`, 'aria-pressed': 'false',
           title: 'Show where this token looks', onClick: () => { highlightIndex = froms.get(i); drawA(); } }, marker, shown);
       }
-      return el('span', { class: `chip ${chipClass(i)}`, role: 'listitem' }, marker, shown);
+      return el('span', { class: `chip ${chipClass(i)}` }, marker, shown);
     });
     A.row.replaceChildren(...chipsA);
     showRow.replaceChildren(el('span', { class: 'muted small', text: 'Show:' }), ...sentence.highlights.map((h, k) =>
       el('button', { type: 'button', class: 'secondary small-btn', dataset: { h: k }, 'aria-pressed': 'false', text: highlightLabel(sentence, h),
         onClick: () => { highlightIndex = k; drawA(); } })));
-    for (const t of tablist.children) t.setAttribute('aria-selected', Number(t.dataset.s) === sentenceIndex ? 'true' : 'false');
-    for (const t of tablist.children) t.tabIndex = Number(t.dataset.s) === sentenceIndex ? 0 : -1;
+    for (const t of tablist.children) {
+      const selected = Number(t.dataset.s) === sentenceIndex;
+      t.setAttribute('aria-selected', selected ? 'true' : 'false');
+      t.tabIndex = selected ? 0 : -1;
+      if (selected) tabpanel.setAttribute('aria-labelledby', t.id);
+    }
     drawA();
     requestAnimationFrame?.(drawA); // measure again once the chips have laid out
   };
 
   const buildA = () => {
     tablist.replaceChildren(...data.sentences.map((s, k) =>
-      el('button', { type: 'button', role: 'tab', class: 'tab', dataset: { s: k }, 'aria-selected': 'false', 'aria-controls': 'attn-real', text: `Sentence ${k + 1}`,
+      el('button', { type: 'button', role: 'tab', class: 'tab', id: `attn-tab-${k}`, dataset: { s: k }, 'aria-selected': 'false', 'aria-controls': 'attn-real-panel', text: `Sentence ${k + 1}`,
         onClick: () => { sentenceIndex = k; highlightIndex = 0; buildSentence(); },
         onKeydown: (e) => {
           if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
@@ -165,7 +171,7 @@ export function mount(root, store) {
     el('h3', { class: 'panel-title', text: 'Your prompt, the shape of the process' }),
     B.scroll, statusB, el('p', { class: 'caption', text: SKETCH_CAPTION }));
 
-  let chipsB = [], timer = null, step = 0, seqB = 0;
+  let chipsB = [], timer = null, step = 0, seqB = 0, fanPending = false;
 
   const drawFan = (i) => {
     B.fit();
@@ -191,29 +197,35 @@ export function mount(root, store) {
     }, STEP_MS);
   };
 
+  // The fan needs real chip positions, so it waits until the stage has been laid out (width > 0).
+  const startFanWhenVisible = () => {
+    if (B.stage.getBoundingClientRect().width > 0) { fanPending = false; startFan(); }
+    else fanPending = true;
+  };
+
   const renderB = async () => {
     const my = ++seqB;
     const state = store.get();
+    const tokenizerName = getModel(state.modelId)?.tokenizer || 'o200k';
     const { text, example: usingExample } = pickText(state.prompt, example);
-    let tokens = state.results?.tokens?.text === text ? state.results.tokens.tokens : null;
+    const published = state.results?.tokens;
+    let tokens = published?.text === text && published?.tokenizer === tokenizerName ? published.tokens : null;
     if (!tokens) {
-      try { tokens = tokenize(await loadTokenizer('o200k'), text); }
-      catch (err) { console.error('attention: tokenizer failed', err); statusB.textContent = 'Could not load the tokenizer.'; return; }
+      try { tokens = tokenize(await loadTokenizer(tokenizerName), text); }
+      catch (err) { console.error('attention: tokenizer failed', err); setStatus(statusB, 'Could not load the tokenizer.'); return; }
     }
     if (my !== seqB) return;
-    chipsB = tokens.map((t, i) => tokenChip(t, i, { role: 'listitem' }));
+    chipsB = tokens.map((t, i) => tokenChip(t, i));
     B.row.replaceChildren(...chipsB);
-    statusB.textContent = usingExample ? 'Showing an example until you type your own.' : '';
-    statusB.hidden = !usingExample;
-    startFan();
-    requestAnimationFrame?.(() => { if (my === seqB) drawFan(step); });
+    setStatus(statusB, usingExample ? EXAMPLE_NOTE : '');
+    startFanWhenVisible();
+    requestAnimationFrame?.(() => { if (my === seqB && !fanPending) drawFan(step); });
   };
 
   // ---- Mount ----------------------------------------------------------------------------------------------------
   viz.replaceChildren(panelA, panelB);
   const load = async () => {
-    statusA.textContent = 'loading attention data…';
-    statusA.hidden = false;
+    setStatus(statusA, 'loading attention data…');
     try { data = await loadAttention(); }
     catch (err) {
       console.error('attention: could not load data', err);
@@ -227,12 +239,18 @@ export function mount(root, store) {
   renderB();
 
   if (typeof ResizeObserver !== 'undefined') {
-    const ro = new ResizeObserver(() => { drawA(); if (chipsB.length) drawFan(step); });
-    ro.observe(A.stage); ro.observe(B.stage);
+    // One observer per stage so a resize of one panel does not redraw the other.
+    new ResizeObserver(() => { drawA(); }).observe(A.stage);
+    new ResizeObserver((entries) => {
+      if (!chipsB.length) return;
+      const width = entries[0]?.contentRect?.width ?? B.stage.getBoundingClientRect().width;
+      if (fanPending) { if (width > 0) startFanWhenVisible(); return; }
+      drawFan(step);
+    }).observe(B.stage);
   }
   const debouncedB = debounce(renderB, PROMPT_DEBOUNCE_MS);
   store.subscribe((state, keys) => {
-    if (keys.includes('runId')) { debouncedB.cancel(); renderB(); return; }
+    if (keys.includes('runId') || keys.includes('modelId')) { debouncedB.cancel(); renderB(); return; }
     if (keys.includes('prompt')) debouncedB();
   });
 }

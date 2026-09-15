@@ -1,30 +1,11 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { el, svg, displayToken, chipClass, debounce, tokenChip, notice } from '../site/dom.js';
+import { el, svg, displayToken, chipClass, debounce, tokenChip, notice, setStatus, chipRow } from '../site/dom.js';
+import { installFakeDom, fakeNode } from './helpers/fake-dom.mjs';
 
-/** A tiny stand-in for the DOM: enough of createElement/append/setAttribute for these helpers. */
-function fakeNode(tagName, ns = null) {
-  const node = {
-    tagName, ns, attributes: {}, className: '', dataset: {}, style: {}, children: [], listeners: {}, _text: '',
-    setAttribute(k, v) { node.attributes[k] = v; },
-    getAttribute(k) { return node.attributes[k]; },
-    append(...kids) { node.children.push(...kids); },
-    replaceChildren(...kids) { node.children = kids; },
-    addEventListener(type, fn) { (node.listeners[type] ||= []).push(fn); },
-    get textContent() { return node._text || node.children.map(c => c.textContent ?? '').join(''); },
-    set textContent(v) { node._text = v; node.children = []; },
-  };
-  return node;
-}
-const realDocument = globalThis.document;
-beforeEach(() => {
-  globalThis.document = {
-    createElement: (tag) => fakeNode(tag),
-    createElementNS: (ns, tag) => fakeNode(tag, ns),
-    createTextNode: (text) => ({ nodeType: 3, textContent: text }),
-  };
-});
-afterEach(() => { globalThis.document = realDocument; });
+let dom;
+beforeEach(() => { dom = installFakeDom(); });
+afterEach(() => { dom.restore(); });
 
 test('displayToken: leading space is split out, U+FFFD becomes a dot, newline becomes a return arrow', () => {
   assert.deepEqual(displayToken(' patient'), { leadingSpace: true, text: 'patient' });
@@ -113,4 +94,75 @@ test('notice replaces the root content with a message and an optional Retry butt
   assert.deepEqual(retries, [1]);
   notice(root, 'Plain');
   assert.equal(root.children[0].children.length, 1);
+});
+
+test('el: strings are always text nodes, never markup', () => {
+  const node = el('span', { text: '<img onerror=x>' });
+  assert.equal(node.children.length, 0);
+  assert.equal(node.textContent, '<img onerror=x>');
+  const withChild = el('span', {}, '<b>bold</b>');
+  assert.equal(withChild.children[0].nodeType, 3);
+  assert.equal(withChild.children[0].textContent, '<b>bold</b>');
+});
+
+test('el: a string handler throws, javascript: URLs throw, srcdoc throws', () => {
+  assert.throws(() => el('a', { onclick: 'x' }), TypeError);
+  assert.throws(() => el('button', { onClick: 'alert(1)' }), TypeError);
+  assert.throws(() => el('a', { href: 'javascript:alert(1)' }), TypeError);
+  assert.throws(() => el('a', { href: '  JavaScript:alert(1)' }), TypeError);
+  assert.throws(() => el('img', { src: 'javascript:x' }), TypeError);
+  assert.throws(() => el('iframe', { srcdoc: '<p>x</p>' }), TypeError);
+  assert.equal(el('a', { href: 'https://example.org/' }).attributes.href, 'https://example.org/');
+  assert.equal(el('a', { href: '#top' }).attributes.href, '#top');
+});
+
+test('the fake DOM refuses HTML-string APIs', () => {
+  const node = el('div');
+  assert.throws(() => { node.innerHTML = '<b>x</b>'; }, /innerHTML/);
+  assert.throws(() => { node.outerHTML = '<b>x</b>'; }, /innerHTML/);
+  assert.throws(() => node.insertAdjacentHTML('beforeend', '<b>x</b>'), /innerHTML/);
+});
+
+test('setStatus sets the text and hides the node when empty', () => {
+  const node = el('p');
+  setStatus(node, 'loading…');
+  assert.equal(node.textContent, 'loading…');
+  assert.equal(node.hidden, false);
+  setStatus(node, '');
+  assert.equal(node.textContent, '');
+  assert.equal(node.hidden, true);
+  setStatus(node, undefined);
+  assert.equal(node.hidden, true);
+});
+
+test('tokenChip: an undefined extra class does not wipe the base classes', () => {
+  const chip = tokenChip({ text: 'a' }, 2, { class: undefined, title: undefined });
+  assert.equal(chip.className, 'chip chip-3');
+  assert.equal(tokenChip({ text: 'a' }, 0, { class: 'band-high' }).className, 'chip chip-1 band-high');
+});
+
+test('chipRow batches appends into one flush and reset clears everything', async () => {
+  const root = el('span');
+  const row = chipRow(root);
+  const a = row.append(' the', { className: 'band-high', title: 'p 0.9', dataset: { i: 0 } });
+  const b = row.append('cat', { attrs: { tabindex: 0 } });
+  assert.equal(row.count, 2);
+  assert.equal(root.children.length, 0, 'nothing is in the DOM before the flush');
+  await new Promise(r => setTimeout(r, 5));
+  assert.deepEqual(root.children, [a, b]);
+  assert.equal(a.className, 'chip chip-1 band-high');
+  assert.equal(a.attributes.title, 'p 0.9');
+  assert.deepEqual(a.dataset, { i: 0 });
+  assert.equal(a.textContent, '␣the');
+  assert.equal(b.className, 'chip chip-2');
+  assert.equal(b.attributes.tabindex, '0');
+  row.append('x');
+  row.reset();
+  assert.equal(row.count, 0);
+  await new Promise(r => setTimeout(r, 5));
+  assert.equal(root.children.length, 0, 'a pending fragment is dropped by reset');
+  row.append('y');
+  row.flush();
+  assert.equal(root.children.length, 1);
+  assert.equal(root.children[0].className, 'chip chip-1', 'numbering restarts after reset');
 });

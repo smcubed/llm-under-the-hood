@@ -12,7 +12,7 @@
  */
 import { loadTokenizer, tokenize } from '../tokenize.js';
 import { getModel } from '../models.js';
-import { el, tokenChip, debounce } from '../dom.js';
+import { el, tokenChip, debounce, setStatus } from '../dom.js';
 
 export const DEMO_WORDS = ['hyponatremia', 'warfarin', 'banana'];
 export const FALLBACK_EXAMPLE = 'The patient presented with chest pain and';
@@ -29,9 +29,9 @@ export function reportedCaption(k) {
   return `The model reported ${plural(k, 'prompt token')} for this prompt.`;
 }
 
-/** Only OpenAI models use the vendored encodings exactly; everyone else is approximated with o200k. */
+/** Models without `exactTokenizer` (everyone but OpenAI) are approximated with o200k; see models.js. */
 export function isApproximateTokenizer(model) {
-  return !model || model.provider !== 'OpenAI';
+  return !model?.exactTokenizer;
 }
 
 export const APPROXIMATION_NOTE = 'This model uses its own tokenizer, so this split is an approximation.';
@@ -63,7 +63,9 @@ export function mount(root, store) {
   const renderReported = () => {
     const state = store.get();
     const model = getModel(state.modelId);
-    const k = state.results?.predict?.usage?.prompt;
+    // Only the count reported for this run; a stale result from an earlier prompt would mislead.
+    const predict = state.results?.predict;
+    const k = predict?.runId === state.runId ? predict.usage?.prompt : undefined;
     const parts = [];
     if (Number.isFinite(k)) parts.push(reportedCaption(k));
     if (isApproximateTokenizer(model)) parts.push(APPROXIMATION_NOTE);
@@ -77,22 +79,19 @@ export function mount(root, store) {
     const model = getModel(state.modelId);
     const name = model?.tokenizer || 'o200k';
     const { text, example: usingExample } = pickText(state.prompt, example);
-    status.textContent = loaded.has(name) ? (usingExample ? EXAMPLE_NOTE : '') : 'loading tokenizer…';
-    status.hidden = status.textContent === '';
+    setStatus(status, loaded.has(name) ? (usingExample ? EXAMPLE_NOTE : '') : 'loading tokenizer…');
     let enc;
     try {
       enc = await loadTokenizer(name);
     } catch (err) {
       if (my !== seq) return;
-      status.textContent = 'Could not load the tokenizer. Reload the page to try again.';
-      status.hidden = false;
+      setStatus(status, 'Could not load the tokenizer. Reload the page to try again.');
       console.error('tokens: tokenizer failed to load', err);
       return;
     }
     loaded.add(name);
     if (my !== seq) return;
-    status.textContent = usingExample ? EXAMPLE_NOTE : '';
-    status.hidden = !usingExample;
+    setStatus(status, usingExample ? EXAMPLE_NOTE : '');
 
     const tokens = tokenize(enc, text);
     row.replaceChildren(...tokens.map((t, i) => tokenChip(t, i)));

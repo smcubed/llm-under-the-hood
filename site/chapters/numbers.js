@@ -80,15 +80,24 @@ export function mount(root, store) {
     );
     tip.hidden = false;
     const wr = wrap.getBoundingClientRect?.() || { left: 0, top: 0, width: VIEW.w };
-    const scale = (wr.width || VIEW.w) / VIEW.w;
+    const wrapWidth = wr.width || VIEW.w;
+    const scale = wrapWidth / VIEW.w;
     const x = pt.cx * scale, y = pt.cy * scale;
-    tip.style.left = `${Math.min(Math.max(x, 8), Math.max(8, (wr.width || VIEW.w) - 180))}px`;
+    const tipWidth = tip.offsetWidth || 180; // measured now that it is visible
+    tip.style.left = `${Math.min(Math.max(x, 8), Math.max(8, wrapWidth - tipWidth - 8))}px`;
     // Below the point in the top half of the map, above it in the bottom half, so the card's overflow never clips it.
     const below = pt.cy < VIEW.h / 2;
     tip.style.top = `${below ? y + 12 : y - 12}px`;
     tip.style.transform = below ? 'none' : 'translateY(-100%)';
   };
   const hideTip = () => { tip.hidden = true; };
+  // One set of delegated listeners on the layer instead of four per point.
+  const pointFor = (target) => { const g = target?.closest?.('.pt'); return g ? points.get(g.getAttribute('data-w')) : null; };
+  pointsLayer.addEventListener('mouseover', (e) => { const pt = pointFor(e.target); if (pt) showTip(pt); });
+  pointsLayer.addEventListener('mouseout', (e) => { const pt = pointFor(e.target); if (pt && !pt.g.contains(e.relatedTarget)) hideTip(); });
+  pointsLayer.addEventListener('focusin', (e) => { const pt = pointFor(e.target); if (pt) showTip(pt); });
+  pointsLayer.addEventListener('focusout', (e) => { if (!pointFor(e.relatedTarget)) hideTip(); });
+  wrap.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !tip.hidden) { e.preventDefault(); hideTip(); } });
 
   const build = () => {
     points = new Map();
@@ -99,10 +108,6 @@ export function mount(root, store) {
       const circle = svg('circle', { cx, cy, r: 4 });
       const g = svg('g', { class: 'pt', 'data-g': word.g, 'data-w': word.w, tabindex: 0, role: 'img', 'aria-label': neighborLabel(word.w, word.g, data.neighbors[word.w]) }, circle);
       const pt = { word, cx, cy, g, circle, label: null };
-      g.addEventListener('mouseenter', () => showTip(pt));
-      g.addEventListener('mouseleave', hideTip);
-      g.addEventListener('focus', () => showTip(pt));
-      g.addEventListener('blur', hideTip);
       pointsLayer.append(g);
       points.set(word.w, pt);
     }

@@ -10,11 +10,13 @@ test('ladder has the eight approved models with required fields', () => {
     'meta-llama/llama-3.3-70b-instruct',
   ]);
   for (const m of MODELS) {
-    for (const k of ['id','label','year','provider','open','logprobs','endpoint','tokenizer','bucket','price'])
+    for (const k of ['id','label','year','provider','open','logprobs','endpoint','tokenizer','bucket','price','exactTokenizer'])
       assert.ok(k in m, `${m.id} missing ${k}`);
     assert.ok(['chat','completion'].includes(m.endpoint));
     assert.ok(['o200k','cl100k'].includes(m.tokenizer));
     assert.equal(typeof m.price.in, 'number'); assert.equal(typeof m.price.out, 'number');
+    assert.equal(typeof m.exactTokenizer, 'boolean', `${m.id} exactTokenizer`);
+    assert.equal(m.exactTokenizer, m.provider === 'OpenAI', `${m.id}: only OpenAI models use the vendored encodings exactly`);
   }
 });
 test('default model exists and supports logprobs', () => {

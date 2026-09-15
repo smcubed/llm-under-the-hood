@@ -1,15 +1,27 @@
-/** Small DOM helpers shared by the chapters. Everything here is plain DOM; the pure parts are tested in tests/dom.test.mjs. */
+/**
+ * Small DOM helpers shared by the chapters. Everything here is plain DOM; the pure parts are tested in tests/dom.test.mjs.
+ *
+ * Safety rule: never build DOM from model or student text with anything but `text:` / `tokenChip`; no innerHTML.
+ * `el()` enforces the cheap parts of that rule: an `on*` attribute must be a function (a string handler throws),
+ * an `href`/`src`-style value that starts with `javascript:` throws, and `srcdoc` is never set.
+ */
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'action', 'formaction', 'poster', 'data']);
 
 function applyAttrs(node, attrs) {
   for (const [key, value] of Object.entries(attrs)) {
     if (value === null || value === undefined || value === false) continue;
-    if (key === 'class') node.className = value;
+    const lower = key.toLowerCase();
+    if (lower.startsWith('on')) {
+      if (typeof value !== 'function') throw new TypeError(`el: "${key}" must be a function, not a string`);
+      node.addEventListener(lower.slice(2), value);
+    } else if (key === 'class') node.className = value;
     else if (key === 'text') node.textContent = value;
     else if (key === 'dataset') Object.assign(node.dataset, value);
-    else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2).toLowerCase(), value);
     else if (key === 'style' && typeof value === 'object') Object.assign(node.style, value);
+    else if (lower === 'srcdoc') throw new TypeError('el: srcdoc is never set');
+    else if (URL_ATTRS.has(lower) && String(value).trim().toLowerCase().startsWith('javascript:')) throw new TypeError(`el: "${key}" must not be a javascript: URL`);
     else node.setAttribute(key, value === true ? '' : String(value));
   }
 }
@@ -24,7 +36,7 @@ function appendChildren(node, children) {
 /**
  * el('button', { class: 'x', dataset: { i: 1 }, onClick: fn, 'aria-label': 'Go', text: 'Go' }, ...children)
  * Attribute values of null/undefined/false are skipped; `true` sets an empty attribute. Children may be strings, nodes,
- * or (nested) arrays; null/false children are skipped.
+ * or (nested) arrays; null/false children are skipped. Strings always become text nodes, never markup.
  */
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -41,6 +53,12 @@ export function svg(tag, attrs = {}, ...children) {
   applyAttrs(node, rest);
   appendChildren(node, children);
   return node;
+}
+
+/** Set a status line: `text` becomes its textContent and the node is hidden when the text is empty. */
+export function setStatus(node, text) {
+  node.textContent = text || '';
+  node.hidden = !text;
 }
 
 /**
@@ -60,12 +78,44 @@ export function chipClass(i) {
   return `chip-${(i % 6) + 1}`;
 }
 
-/** One token chip. `extra` merges into the attributes (e.g. `title`, `tabindex`, handlers). */
+/** One token chip. `extra` merges into the attributes (e.g. `title`, `tabindex`, handlers); `extra.class` is appended. */
 export function tokenChip(token, i, extra = {}) {
   const { leadingSpace, text } = displayToken(token.text);
-  const attrs = { class: `chip ${chipClass(i)}`, title: Number.isInteger(token.id) ? `token id ${token.id}` : undefined, ...extra };
-  if (extra.class) attrs.class = `chip ${chipClass(i)} ${extra.class}`;
+  const { class: extraClass, ...rest } = extra;
+  const attrs = {
+    class: `chip ${chipClass(i)}${extraClass ? ` ${extraClass}` : ''}`,
+    title: Number.isInteger(token.id) ? `token id ${token.id}` : undefined,
+    ...rest,
+  };
   return el('span', attrs, leadingSpace ? el('span', { class: 'sp', 'aria-hidden': 'true', text: '␣' }) : null, text);
+}
+
+/**
+ * A row of token chips that batches appends into a DocumentFragment flushed on the next animation frame (setTimeout 0
+ * where requestAnimationFrame does not exist, as in tests), so a fast stream does not lay out once per token.
+ * → { append(tokenText, { className, title, dataset, attrs }) → chip, reset(), flush(), count }
+ * `attrs` are extra attributes passed through to `tokenChip` (e.g. tabindex, role).
+ */
+export function chipRow(root) {
+  const schedule = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 0);
+  let frag = null, scheduled = false, count = 0;
+  const flush = () => {
+    scheduled = false;
+    if (frag) { root.append(frag); frag = null; }
+  };
+  return {
+    append(tokenText, { className, title, dataset, attrs } = {}) {
+      const chip = tokenChip({ text: tokenText }, count, { class: className, title, dataset, ...(attrs || {}) });
+      count += 1;
+      if (!frag) frag = document.createDocumentFragment();
+      frag.append(chip);
+      if (!scheduled) { scheduled = true; schedule(flush); }
+      return chip;
+    },
+    reset() { frag = null; count = 0; root.replaceChildren(); },
+    flush,
+    get count() { return count; },
+  };
 }
 
 export function prefersReducedMotion() {

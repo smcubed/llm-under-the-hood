@@ -46,11 +46,14 @@ function showGate() {
   $('#footer').hidden = false;
   $('#passcode').focus();
 }
+let chaptersMounted = false;
+/** Reveal the page and mount the chapters exactly once, only now that their sections have layout. */
 function showMain() {
   $('#gate').hidden = true;
   $('#main').hidden = false;
   $('#strip').hidden = false;
   $('#footer').hidden = false;
+  if (!chaptersMounted) { chaptersMounted = true; mountChapters(); }
 }
 
 function wireGate() {
@@ -158,7 +161,6 @@ async function boot() {
   wirePrompt();
   wireStrip();
   wireRunScroll();
-  mountChapters();
   let ok = false;
   try { ok = await checkSession(); } catch { ok = false; }
   if (ok) showMain(); else showGate();
