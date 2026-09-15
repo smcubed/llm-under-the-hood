@@ -20,13 +20,48 @@ function makeClassList(node) {
   };
 }
 
-const matches = (node, selector) => {
+/**
+ * A small selector matcher: compound selectors (`button.x#id[type=range]:not(.y):empty`) joined by descendant (space)
+ * or child (`>`) combinators, plus comma-separated lists. Enough for tests; not a full engine.
+ */
+function matchCompound(node, compound) {
   if (!node || node.nodeType !== 1) return false;
-  if (selector.startsWith('.')) return node.classList.contains(selector.slice(1));
-  if (selector.startsWith('#')) return node.attributes.id === selector.slice(1);
-  if (selector.startsWith('[')) { const m = /^\[([^=\]]+)(?:="?([^"\]]*)"?)?\]$/.exec(selector); return m && (m[1] in node.attributes) && (m[2] === undefined || node.attributes[m[1]] === m[2]); }
-  return node.tagName.toLowerCase() === selector.toLowerCase();
-};
+  const re = /([a-zA-Z][\w-]*|\*)|\.([\w-]+)|#([\w-]+)|\[([\w-]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\]]*)))?\]|:not\(([^)]*)\)|:(empty|disabled|checked)/gy;
+  let m, consumed = 0;
+  while ((m = re.exec(compound)) !== null) {
+    consumed = re.lastIndex;
+    const [, tag, cls, id, attr, v1, v2, v3, notSel, pseudo] = m;
+    if (tag !== undefined) { if (tag !== '*' && node.tagName.toLowerCase() !== tag.toLowerCase()) return false; }
+    else if (cls !== undefined) { if (!node.classList.contains(cls)) return false; }
+    else if (id !== undefined) { if (node.attributes.id !== id) return false; }
+    else if (attr !== undefined) {
+      if (!(attr in node.attributes)) return false;
+      const want = v1 ?? v2 ?? v3;
+      if (want !== undefined && node.attributes[attr] !== want) return false;
+    } else if (notSel !== undefined) { if (matchCompound(node, notSel.trim())) return false; }
+    else if (pseudo === 'empty') { if (node.children.length) return false; }
+    else if (pseudo === 'disabled') { if (!node.disabled) return false; }
+    else if (pseudo === 'checked') { if (!node.checked) return false; }
+  }
+  if (consumed !== compound.length) throw new Error(`fake DOM: unsupported selector "${compound}"`);
+  return true;
+}
+const matches = (node, selector) => selector.split(',').some((alt) => {
+  const parts = alt.trim().split(/\s*(>)\s*|\s+/).filter(Boolean);
+  let n = node, i = parts.length - 1;
+  if (!matchCompound(n, parts[i])) return false;
+  i--;
+  while (i >= 0) {
+    let childOnly = false;
+    if (parts[i] === '>') { childOnly = true; i--; }
+    n = n.parentNode;
+    if (childOnly) { if (!matchCompound(n, parts[i])) return false; i--; continue; }
+    while (n && n.nodeType === 1 && !matchCompound(n, parts[i])) n = n.parentNode;
+    if (!n || n.nodeType !== 1) return false;
+    i--;
+  }
+  return true;
+});
 function* walk(node) {
   for (const child of node.children || []) { yield child; yield* walk(child); }
 }
@@ -51,9 +86,13 @@ export function fakeFragment() {
 export function fakeNode(tagName, ns = null, doc = null) {
   const node = {
     nodeType: 1, tagName, ns, attributes: {}, className: '', dataset: {}, style: {}, children: [], listeners: {}, _text: '',
-    parentNode: null, hidden: false, disabled: false, tabIndex: -1, value: '', rect: null,
+    parentNode: null, hidden: false, disabled: false, checked: false, tabIndex: -1, value: '', rect: null,
     get isConnected() { for (let n = node; n; n = n.parentNode) if (n === doc?.documentElement) return true; return false; },
-    setAttribute(k, v) { node.attributes[k] = String(v); },
+    setAttribute(k, v) {
+      node.attributes[k] = String(v);
+      if (k === 'hidden') node.hidden = true; else if (k === 'disabled') node.disabled = true;
+      else if (k === 'checked') node.checked = true; else if (k === 'value') node.value = String(v);
+    },
     getAttribute(k) { return k in node.attributes ? node.attributes[k] : null; },
     removeAttribute(k) { delete node.attributes[k]; },
     hasAttribute(k) { return k in node.attributes; },
