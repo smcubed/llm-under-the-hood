@@ -26,6 +26,14 @@ export const AUTOCOMPLETE_MODEL = 'openai/gpt-3.5-turbo-instruct';
 
 export function getModel(id) { return MODELS.find(m => m.id === id); }
 
+/** Era label for a model picker's optgroups. Open-weights models get their own group regardless of year. */
+export function eraGroup(model) {
+  if (model.open) return 'Open weights';
+  if (model.year <= 2023) return 'Early (2022–2023)';
+  if (model.year === 2024) return 'Recent (2024)';
+  return 'Current (2025–2026)';
+}
+
 /** Estimated USD for a call when the upstream did not report cost. Missing or invalid token counts count as 0. */
 export function estimateCost(model, promptTokens, completionTokens) {
   return ((Number(promptTokens) || 0) * model.price.in + (Number(completionTokens) || 0) * model.price.out) / 1e6;

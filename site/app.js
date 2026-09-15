@@ -1,4 +1,5 @@
-import { MODELS, DEFAULT_MODEL, LIMITS, getModel } from './models.js';
+import { DEFAULT_MODEL, LIMITS, getModel } from './models.js';
+import { buildModelSelect } from './model-select.js';
 import { createStore } from './store.js';
 import { checkSession, login } from './api.js';
 import { prefersReducedMotion } from './dom.js';
@@ -9,35 +10,6 @@ const $ = (sel, root = document) => root.querySelector(sel);
 export const store = createStore({ prompt: '', modelId: DEFAULT_MODEL, system: '', runId: 0, results: {} });
 
 const scrollToId = (id) => document.getElementById(id)?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
-
-/** Era label for the model picker's optgroups. Open-weights models get their own group regardless of year. */
-export function eraGroup(model) {
-  if (model.open) return 'Open weights';
-  if (model.year <= 2023) return 'Early (2022–2023)';
-  if (model.year === 2024) return 'Recent (2024)';
-  return 'Current (2025–2026)';
-}
-
-function buildModelSelect(select) {
-  const groups = new Map();
-  for (const m of MODELS) {
-    if (!groups.has(eraGroup(m))) groups.set(eraGroup(m), []);
-    groups.get(eraGroup(m)).push(m);
-  }
-  select.replaceChildren();
-  for (const [label, models] of groups) {
-    const og = document.createElement('optgroup');
-    og.label = label;
-    for (const m of models) {
-      const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.label + (m.logprobs ? '' : ' · no probabilities');
-      og.append(opt);
-    }
-    select.append(og);
-  }
-  select.value = DEFAULT_MODEL;
-}
 
 function showGate() {
   $('#gate').hidden = false;
@@ -90,7 +62,7 @@ function wirePrompt() {
   for (const chip of document.querySelectorAll('.starter')) {
     chip.addEventListener('click', () => { textarea.value = chip.textContent.trim(); sync(); textarea.focus(); });
   }
-  buildModelSelect(select);
+  buildModelSelect(select, { selected: DEFAULT_MODEL });
   const syncModel = () => {
     store.set({ modelId: select.value });
     blurb.textContent = getModel(select.value)?.blurb || '';

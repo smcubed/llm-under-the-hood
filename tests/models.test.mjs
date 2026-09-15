@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MODELS, DEFAULT_MODEL, AUTOCOMPLETE_MODEL, LIMITS, getModel, estimateCost } from '../site/models.js';
+import { MODELS, DEFAULT_MODEL, AUTOCOMPLETE_MODEL, LIMITS, getModel, estimateCost, eraGroup } from '../site/models.js';
 
 test('ladder has the eight approved models with required fields', () => {
   const ids = MODELS.map(m => m.id);
@@ -44,4 +44,13 @@ test('model entries, their prices, and the ladder are frozen', () => {
   assert.throws(() => { MODELS[0].price.in = 0; }, TypeError);
   assert.throws(() => { MODELS[0].label = 'x'; }, TypeError);
   assert.throws(() => { MODELS.push({}); }, TypeError);
+});
+
+test('eraGroup buckets by year with open weights in their own group', () => {
+  assert.equal(eraGroup(getModel('openai/gpt-3.5-turbo-instruct')), 'Early (2022–2023)');
+  assert.equal(eraGroup(getModel('openai/gpt-4')), 'Early (2022–2023)');
+  assert.equal(eraGroup(getModel('openai/gpt-4o-mini')), 'Recent (2024)');
+  assert.equal(eraGroup(getModel('anthropic/claude-haiku-4.5')), 'Current (2025–2026)');
+  assert.equal(eraGroup(getModel('google/gemini-3.5-flash-lite')), 'Current (2025–2026)');
+  assert.equal(eraGroup(getModel('meta-llama/llama-3.3-70b-instruct')), 'Open weights', 'open weights win over the 2024 year');
 });
