@@ -61,6 +61,12 @@ export function setStatus(node, text) {
   node.hidden = !text;
 }
 
+/** Set a live region (`role="status"` / `aria-live`): the node stays in the DOM, visible and simply empty when there is
+ *  no text, because screen readers only announce changes inside a region that is already present and not hidden. */
+export function setLiveStatus(node, text) {
+  node.textContent = text || '';
+}
+
 /**
  * How a token's text is shown on screen: a leading space is reported separately (renderers draw a visible marker),
  * undecodable bytes (U+FFFD) become a middle dot, and newlines become a return arrow so the chip stays on one line.

@@ -85,16 +85,19 @@ export function fakeFragment() {
 
 export function fakeNode(tagName, ns = null, doc = null) {
   const node = {
-    nodeType: 1, tagName, ns, attributes: {}, className: '', dataset: {}, style: {}, children: [], listeners: {}, _text: '',
-    parentNode: null, hidden: false, disabled: false, checked: false, tabIndex: -1, value: '', rect: null,
+    nodeType: 1, tagName, ns, attributes: {}, className: '', dataset: {}, style: {}, children: [], listeners: {}, _text: '', _hidden: false,
+    parentNode: null, disabled: false, checked: false, tabIndex: -1, value: '', rect: null,
+    /** `hidden` is mirrored to the attribute in both directions, as in a real element. */
+    get hidden() { return node._hidden; },
+    set hidden(v) { node._hidden = Boolean(v); if (node._hidden) node.attributes.hidden = ''; else delete node.attributes.hidden; },
     get isConnected() { for (let n = node; n; n = n.parentNode) if (n === doc?.documentElement) return true; return false; },
     setAttribute(k, v) {
       node.attributes[k] = String(v);
-      if (k === 'hidden') node.hidden = true; else if (k === 'disabled') node.disabled = true;
+      if (k === 'hidden') node._hidden = true; else if (k === 'disabled') node.disabled = true;
       else if (k === 'checked') node.checked = true; else if (k === 'value') node.value = String(v);
     },
     getAttribute(k) { return k in node.attributes ? node.attributes[k] : null; },
-    removeAttribute(k) { delete node.attributes[k]; },
+    removeAttribute(k) { delete node.attributes[k]; if (k === 'hidden') node._hidden = false; },
     hasAttribute(k) { return k in node.attributes; },
     append(...kids) { for (const k of kids) adopt(node, k); },
     prepend(...kids) { const rest = node.children.splice(0); for (const k of kids) adopt(node, k); for (const k of rest) node.children.push(k); },
@@ -107,16 +110,19 @@ export function fakeNode(tagName, ns = null, doc = null) {
     querySelectorAll(selector) { return [...walk(node)].filter(n => matches(n, selector)); },
     addEventListener(type, fn) { (node.listeners[type] ||= []).push(fn); },
     removeEventListener(type, fn) { node.listeners[type] = (node.listeners[type] || []).filter(f => f !== fn); },
-    /** Fire `type` on this node, then bubble to ancestors (and the document) unless `stopPropagation` is called. */
+    /** Fire `type` on this node, then bubble to ancestors (and the document) unless `stopPropagation` is called.
+     *  A `click` on a disabled control is dropped, as browsers do. */
     dispatch(type, event = {}) {
       const ev = { type, target: node, defaultPrevented: false, preventDefault() { ev.defaultPrevented = true; }, stopPropagation() { ev.stopped = true; }, ...event };
+      if (type === 'click' && node.disabled) return ev;
       for (let n = node; n && !ev.stopped; n = n.parentNode) { ev.currentTarget = n; for (const fn of [...(n.listeners?.[type] || [])]) fn(ev); }
       if (!ev.stopped && doc) { ev.currentTarget = doc; for (const fn of [...(doc.listeners[type] || [])]) fn(ev); }
       return ev;
     },
     focus() { if (doc) doc.activeElement = node; },
     blur() { if (doc && doc.activeElement === node) doc.activeElement = doc.body; },
-    getBoundingClientRect() { return node.rect || { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
+    /** A small nonzero box by default so layout-dependent code (popover placement) sees a real anchor; set `rect` to override. */
+    getBoundingClientRect() { return node.rect || { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 }; },
     get offsetWidth() { return node.rect?.width || 0; },
     get offsetHeight() { return node.rect?.height || 0; },
     get textContent() { return node._text || node.children.map(c => c.textContent ?? '').join(''); },

@@ -266,6 +266,7 @@ button.primary:not(:disabled):hover { filter: brightness(1.08); }
 .token-row { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; margin: 4px 0 12px; min-height: 2em; }
 .caption { margin: 0 0 6px; }
 .status { margin: 0 0 8px; }
+.status:empty { margin: 0; }
 .demo { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--border); }
 .demo-title { margin: 0 0 6px; }
 .demo-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: center; }
@@ -393,9 +394,10 @@ button.chip { border: 1px solid transparent; cursor: pointer; font: inherit; fon
 .out-line .band-low { background: color-mix(in srgb, var(--p-low) 30%, var(--card)); border-bottom-color: var(--p-low); }
 .out-line .band-unknown { border-bottom-color: var(--border); }
 .out-line.confidence-off .band-high, .out-line.confidence-off .band-mid, .out-line.confidence-off .band-low, .out-line.confidence-off .band-unknown { background: none; border-bottom-color: transparent; }
-.can-fork { cursor: pointer; }
-.can-fork:hover, .can-fork:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.can-fork[aria-expanded="true"] { outline: 2px solid var(--warn); outline-offset: 1px; }
+.can-fork, .has-alts { cursor: pointer; }
+.can-fork:hover, .can-fork:focus-visible, .has-alts:hover, .has-alts:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.can-fork[aria-expanded="true"], .has-alts[aria-expanded="true"] { outline: 2px solid var(--warn); outline-offset: 1px; }
+.out-line.no-prompt .out-arrow { display: none; }
 .out-line .fork-marker, .fork-marker { font-family: var(--font); font-size: 0.72em; color: var(--warn); background: none; border: 1px dashed var(--warn); border-bottom: 1px dashed var(--warn); border-radius: 999px; padding: 0 7px; margin: 0 3px; vertical-align: middle; white-space: nowrap; }
 .considered { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; min-width: 0; }
 .considered h4 { margin: 0 0 6px; font-size: 0.95rem; }
@@ -413,6 +415,9 @@ button.chip { border: 1px solid transparent; cursor: pointer; font: inherit; fon
 .fork-alt { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; appearance: none; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; cursor: pointer; text-align: left; }
 .fork-alt:hover { border-color: var(--accent); }
 .fork-alt.is-current { border-color: var(--warn); }
+.fork-alt.is-readonly { cursor: default; }
+.fork-alt.is-readonly:hover { border-color: var(--border); }
+.fork-alt.is-readonly.is-current:hover { border-color: var(--warn); }
 .fork-label { font-family: var(--mono); font-size: 0.95em; white-space: pre; }
 .fork-label .sp { color: var(--muted); opacity: 0.7; font-size: 0.85em; }
 .fork-pct { font-variant-numeric: tabular-nums; font-size: 0.9em; }

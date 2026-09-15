@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { el, svg, displayToken, chipClass, debounce, tokenChip, notice, setStatus, chipRow } from '../site/dom.js';
+import { el, svg, displayToken, chipClass, debounce, tokenChip, notice, setStatus, setLiveStatus, chipRow } from '../site/dom.js';
 import { installFakeDom, fakeNode } from './helpers/fake-dom.mjs';
 
 let dom;
@@ -133,6 +133,17 @@ test('setStatus sets the text and hides the node when empty', () => {
   assert.equal(node.hidden, true);
   setStatus(node, undefined);
   assert.equal(node.hidden, true);
+});
+
+test('setLiveStatus sets the text and never hides the node', () => {
+  const node = el('p', { role: 'status' });
+  setLiveStatus(node, 'Writing…');
+  assert.equal(node.textContent, 'Writing…');
+  setLiveStatus(node, '');
+  assert.equal(node.textContent, '');
+  assert.equal(node.hidden, false);
+  setLiveStatus(node, undefined);
+  assert.equal(node.hidden, false);
 });
 
 test('tokenChip: an undefined extra class does not wipe the base classes', () => {
