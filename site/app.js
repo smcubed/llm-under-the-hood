@@ -19,12 +19,16 @@ function showGate() {
   $('#passcode').focus();
 }
 let chaptersMounted = false;
+let sessionReady = false;   // Run stays disabled until the session check has settled and the page is shown
+let syncRun = () => {};
 /** Reveal the page and mount the chapters exactly once, only now that their sections have layout. */
 function showMain() {
   $('#gate').hidden = true;
   $('#main').hidden = false;
   $('#strip').hidden = false;
   $('#footer').hidden = false;
+  sessionReady = true;
+  syncRun();
   if (!chaptersMounted) { chaptersMounted = true; mountChapters(); }
 }
 
@@ -55,9 +59,10 @@ function wirePrompt() {
   const sync = () => {
     const value = textarea.value;
     counter.textContent = `${value.length} / ${LIMITS.promptChars}`;
-    run.disabled = value.trim().length === 0;
+    run.disabled = !sessionReady || value.trim().length === 0;
     store.set({ prompt: value });
   };
+  syncRun = sync;
   textarea.addEventListener('input', sync);
   for (const chip of document.querySelectorAll('.starter')) {
     chip.addEventListener('click', () => { textarea.value = chip.textContent.trim(); sync(); textarea.focus(); });

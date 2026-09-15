@@ -264,3 +264,18 @@ test('a completion model renders prompt and output as one line with the note', a
   assert.equal(q('.out-block p.muted.small:not(.status)').hidden, false);
   assert.equal(q('.out-block p.muted.small:not(.status)').textContent, 'This model just continues the text.');
 });
+
+test('the dice animation runs by default and is skipped when the student prefers reduced motion', async () => {
+  const { store, button, bigBars, q } = mountChapter();
+  script(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
+  store.set({ runId: 1 });
+  await waitFor(() => bigBars().length === 4);
+  Math.random = () => 0;
+  button('🎲 Roll the dice').dispatch('click');
+  assert.ok(q('.die').classList.contains('dice'), 'the keyframes class is (re)applied on a roll');
+
+  dom.window.matchMedia = () => ({ matches: true });
+  q('.die').classList.remove('dice');
+  button('🎲 Roll the dice').dispatch('click');
+  assert.equal(q('.die').classList.contains('dice'), false, 'no animation under prefers-reduced-motion');
+});

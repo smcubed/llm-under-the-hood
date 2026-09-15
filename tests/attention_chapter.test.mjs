@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { LOADING_NOTE } from '../site/chapters/attention.js';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { arcPath, normalizeRow, arcHeight, wordAt, highlightCaption, highlightLabel, loadAttention, ARC_H } from '../site/chapters/attention.js';
@@ -52,4 +53,8 @@ test('loadAttention forgets a failed fetch so Retry can succeed, then caches', a
   const ok = async () => { calls++; return new Response(JSON.stringify(data), { status: 200 }); };
   const a = await loadAttention({ fetcher: ok }); const b = await loadAttention({ fetcher: ok });
   assert.equal(a, b); assert.equal(calls, 2);
+});
+
+test('the data-loading note is a capitalized "Loading examples…"', () => {
+  assert.equal(LOADING_NOTE, 'Loading examples…');
 });

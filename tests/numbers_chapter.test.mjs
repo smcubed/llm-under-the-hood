@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { promptWords, project, matchWords, mapStatus, neighborLabel, loadEmbeddings, GROUPS, VIEW } from '../site/chapters/numbers.js';
+import { installFakeDom } from './helpers/fake-dom.mjs';
+import { mountViz } from './helpers/mount-viz.mjs';
+import { waitFor } from './helpers/wait-for.mjs';
+import { createStore } from '../site/store.js';
+import { mount, promptWords, project, matchWords, mapStatus, neighborLabel, loadEmbeddings, GROUPS, VIEW, LOADING_NOTE } from '../site/chapters/numbers.js';
 
 test('promptWords: lowercase, punctuation stripped, possessive dropped, unique, in order', () => {
   assert.deepEqual(promptWords("My grandmother's favorite recipe was"), ['my', 'grandmother', 'favorite', 'recipe', 'was']);
@@ -44,4 +48,20 @@ test('loadEmbeddings caches a success and forgets a failure so a retry can succe
   const b = await loadEmbeddings({ fetcher: ok });
   assert.equal(a, b);
   assert.equal(calls, 2);
+});
+
+test('mount shows a map-sized skeleton and "Loading map…" until the data lands, then the map replaces them', async () => {
+  const dom = installFakeDom();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ words: [{ w: 'warfarin', g: 'drug', x: 0.1, y: 0.2 }], neighbors: {} }), { status: 200 });
+  try {
+    const { root, viz, q } = mountViz(dom);
+    mount(root, createStore({ prompt: '', modelId: 'openai/gpt-4o-mini', system: '', runId: 0, results: {} }));
+    assert.ok(q('.map-skeleton'), 'a skeleton holds the map\'s footprint while loading');
+    assert.equal(q('.map-skeleton').attributes['aria-hidden'], 'true');
+    assert.equal(q('[role=status]').textContent, LOADING_NOTE);
+    await waitFor(() => viz.querySelector('svg')); // tag, not .map: the fake DOM matches classes on className, and svg() sets class as an attribute
+    assert.equal(q('.map-skeleton'), null);
+    assert.notEqual(q('[role=status]').textContent, LOADING_NOTE);
+  } finally { globalThis.fetch = realFetch; dom.restore(); }
 });

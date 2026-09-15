@@ -14,6 +14,7 @@ export const STEP_MS = 500;        // Panel B animation step
 const PROMPT_DEBOUNCE_MS = 300;
 export const MODEL_NOTE = 'GPT-2, a 2019 model small enough to inspect. Bigger models do the same thing across hundreds of heads.';
 export const SKETCH_CAPTION = 'Your prompt: each token can look at every token before it. We are not showing real weights here; hosted models do not share them.';
+export const LOADING_NOTE = 'Loading examples…';
 
 /** Quadratic arc from x1 to x2 on the baseline, bulging up by `height`. Always starts with M. */
 export function arcPath(x1, x2, baseY, height) {
@@ -225,7 +226,7 @@ export function mount(root, store) {
   // ---- Mount ----------------------------------------------------------------------------------------------------
   viz.replaceChildren(panelA, panelB);
   const load = async () => {
-    setStatus(statusA, 'loading attention data…');
+    setStatus(statusA, LOADING_NOTE);
     try { data = await loadAttention(); }
     catch (err) {
       console.error('attention: could not load data', err);

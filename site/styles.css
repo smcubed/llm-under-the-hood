@@ -18,6 +18,7 @@
   --p-high: #2f8f4e;
   --p-mid: #d99a1b;
   --p-low: #c8402f;
+  --shadow: rgba(0, 0, 0, 0.18);
   --strip-h: 52px;
   --radius: 8px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -42,6 +43,7 @@
     --p-high: #5ccf7f;
     --p-mid: #f2c04a;
     --p-low: #f0705f;
+    --shadow: rgba(0, 0, 0, 0.55);
   }
 }
 
@@ -55,6 +57,8 @@ body {
   color: var(--fg);
   font: 17px/1.55 var(--font);
   -webkit-text-size-adjust: 100%;
+  /* Safety net only: every wide element (token rows, arcs, strip) scrolls inside its own container, grid children carry
+     min-width: 0 and flex rows wrap, so nothing should reach this. */
   overflow-x: hidden;
 }
 main, .gate, .site-footer { max-width: 860px; margin-inline: auto; }
@@ -240,7 +244,7 @@ button.primary:not(:disabled):hover { filter: brightness(1.08); }
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 8px 24px var(--shadow);
   padding: 10px 12px;
   font-size: 0.95rem;
 }
@@ -261,6 +265,12 @@ button.primary:not(:disabled):hover { filter: brightness(1.08); }
   .strip-list li + li::before { margin: 0 2px; }
   .strip-btn { padding: 6px 8px; font-size: 0.9rem; }
 }
+@media print {
+  .strip, .starters, .controls, .predict-controls, .compare-actions, .system-actions, .legend-row, .popover, .map-tip, .try { display: none !important; }
+  body { padding-inline: 0; background: var(--card); }
+  .chapter { min-height: 0; break-inside: avoid; }
+  .viz { overflow: visible; }
+}
 
 /* Chapter 1: tokens */
 .token-row { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; margin: 4px 0 12px; min-height: 2em; }
@@ -269,9 +279,9 @@ button.primary:not(:disabled):hover { filter: brightness(1.08); }
 .status:empty { margin: 0; }
 .demo { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--border); }
 .demo-title { margin: 0 0 6px; }
-.demo-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: center; }
+.demo-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; align-items: center; }
 .demo-word { font-weight: 600; font-family: var(--mono); font-size: 0.95em; }
-.demo-chips { display: flex; flex-wrap: wrap; gap: 2px; }
+.demo-chips { display: flex; flex-wrap: wrap; gap: 2px; min-width: 0; }
 
 /* Chapter 2: embedding map */
 :root {
@@ -285,6 +295,9 @@ button.primary:not(:disabled):hover { filter: brightness(1.08); }
   }
 }
 .map-wrap { position: relative; }
+/* Loading skeleton: the map's footprint with a soft shimmer (stilled by the reduced-motion rule below). */
+.map-skeleton { width: 100%; aspect-ratio: 3 / 2; border-radius: var(--radius); background: linear-gradient(90deg, var(--border) 25%, var(--card) 50%, var(--border) 75%); background-size: 200% 100%; animation: shimmer 1.6s linear infinite; margin-bottom: 8px; }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .map { display: block; width: 100%; max-width: 100%; height: auto; background: var(--bg); border-radius: var(--radius); }
 .pt circle { fill: var(--muted); stroke: var(--card); stroke-width: 1; opacity: 0.85; transition: r 200ms ease; cursor: default; }
 .pt:hover circle, .pt:focus circle { opacity: 1; stroke: var(--fg); stroke-width: 1.5; }
@@ -317,7 +330,7 @@ button.primary:not(:disabled):hover { filter: brightness(1.08); }
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 6px 18px var(--shadow);
   padding: 8px 10px;
   font-size: 0.9rem;
   pointer-events: none;
@@ -329,7 +342,7 @@ button.primary:not(:disabled):hover { filter: brightness(1.08); }
 /* Chapter 3: attention */
 .panel + .panel { margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--border); }
 .panel-title { font-size: 1.05rem; margin: 0 0 8px; }
-.tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .tab { appearance: none; background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; font-size: 0.92rem; cursor: pointer; color: var(--muted); }
 .tab[aria-selected="true"] { background: var(--accent); color: var(--accent-fg); border-color: transparent; font-weight: 600; }
 .arc-scroll { overflow-x: auto; overflow-y: hidden; margin: 0 -4px; padding: 0 4px; }
@@ -465,6 +478,7 @@ button.chip { border: 1px solid transparent; cursor: pointer; font: inherit; fon
 .compare-controls { display: grid; gap: 10px; margin-bottom: 4px; }
 .model-picks { display: grid; grid-template-columns: 1fr; gap: 8px; }
 @media (min-width: 700px) { .model-picks { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.model-picks .field { min-width: 0; }
 .model-picks .field label { display: block; margin: 0 0 4px; font-size: 0.92rem; }
 .compare-prompt label { display: block; margin: 4px 0; }
 .suggested { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 0; }

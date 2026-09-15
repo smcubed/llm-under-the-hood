@@ -10,6 +10,7 @@ export const VIEW = { w: 600, h: 400, pad: 24 };
 export const GROUPS = ['drug', 'anatomy', 'symptom', 'disease', 'test', 'people', 'place', 'food', 'everyday', 'verb', 'time'];
 export const CAPTION = 'Each token becomes a list of 384 numbers. Flattened to two dimensions here. Words used in similar ways land near each other.';
 export const NONE_ON_MAP = 'None of your words are on this small map; hover around anyway.';
+export const LOADING_NOTE = 'Loading map…';
 const DATA_URL = 'data/embeddings.json';
 const PROMPT_DEBOUNCE_MS = 150;
 
@@ -140,7 +141,8 @@ export function mount(root, store) {
   };
 
   const load = async () => {
-    viz.replaceChildren(el('p', { class: 'status muted small', role: 'status', text: 'loading the word map…' }));
+    // A skeleton the size of the map keeps the page from jumping when the data lands.
+    viz.replaceChildren(el('div', { class: 'map-skeleton', 'aria-hidden': 'true' }), el('p', { class: 'status muted small', role: 'status', text: LOADING_NOTE }));
     try {
       data = await loadEmbeddings();
     } catch (err) {

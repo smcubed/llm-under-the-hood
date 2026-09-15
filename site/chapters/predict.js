@@ -10,7 +10,7 @@
  */
 import { getModel, LIMITS } from '../models.js';
 import { rescale, sample } from '../probs.js';
-import { el, notice, setLiveStatus } from '../dom.js';
+import { el, notice, prefersReducedMotion, setLiveStatus } from '../dom.js';
 import { closePopover } from '../popover.js';
 import { createRun } from '../run.js';
 import { request } from '../stream.js';
@@ -156,9 +156,10 @@ export function mount(root, store) {
     barsCap.hidden = false;
     bars = [...first.top.map(t => makeBar(t.text)), makeBar(null, { other: true })];
     barsBox.replaceChildren(...bars.map(b => b.row));
-    // Widths start at 0 and are set on the next frame so the CSS transition animates them in.
+    // Widths start at 0 and are set on the next frame so the CSS transition animates them in; with reduced motion
+    // they are painted at once.
     const paint = () => renderBars(sliderTouched ? temperature : null);
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(paint); else paint();
+    if (typeof requestAnimationFrame === 'function' && !prefersReducedMotion()) requestAnimationFrame(paint); else paint();
   };
 
   // ---- Requests ---------------------------------------------------------------------------------------------------
@@ -206,6 +207,7 @@ export function mount(root, store) {
   };
 
   const restartDice = () => {
+    if (prefersReducedMotion()) return;
     die.classList.remove('dice');
     void die.offsetWidth; // restart the keyframes
     die.classList.add('dice');
