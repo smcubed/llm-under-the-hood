@@ -19,6 +19,17 @@ test('ladder has the eight approved models with required fields', () => {
     assert.equal(m.exactTokenizer, m.provider === 'OpenAI', `${m.id}: only OpenAI models use the vendored encodings exactly`);
   }
 });
+test('upstream, when present, has only omit/extra keys of the right types', () => {
+  for (const m of MODELS) {
+    if (!('upstream' in m)) continue;
+    assert.ok(Object.keys(m.upstream).every(k => ['omit', 'extra'].includes(k)), `${m.id} upstream keys: ${Object.keys(m.upstream)}`);
+    if ('omit' in m.upstream) assert.ok(Array.isArray(m.upstream.omit) && m.upstream.omit.every(k => typeof k === 'string'), `${m.id} upstream.omit`);
+    if ('extra' in m.upstream) assert.ok(m.upstream.extra && typeof m.upstream.extra === 'object' && !Array.isArray(m.upstream.extra), `${m.id} upstream.extra`);
+    assert.ok(Object.isFrozen(m.upstream), `${m.id} upstream is frozen`);
+  }
+  assert.deepEqual(getModel('openai/gpt-5-mini').upstream, { omit: ['temperature'], extra: { reasoning: { effort: 'minimal' } } });
+  assert.equal('upstream' in getModel('openai/gpt-4o-mini'), false);
+});
 test('default model exists and supports logprobs', () => {
   assert.equal(getModel(DEFAULT_MODEL).logprobs, true);
 });

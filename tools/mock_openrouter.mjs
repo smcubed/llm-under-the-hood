@@ -1,12 +1,14 @@
 // Local stand-in for OpenRouter so the Worker and the UI can be exercised offline.
 // POST /chat/completions and POST /completions stream a canned, prompt-aware continuation as SSE,
 // one token every ~60 ms (MOCK_TOKEN_MS overrides), in the same shapes OpenRouter uses. `npm run mock` listens on 8788.
-// A prefix the client has already written (an assistant message, or a completion prompt ending in canned text) is not
-// repeated: the stream picks up where the canned text left off.
+// A prefix the client has already written (the last assistant message, or a completion prompt ending in canned text) is
+// not repeated: the stream picks up where the canned text left off. The Worker's "continue" user message that follows
+// the assistant text is ignored when choosing the canned continuation.
 import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { getModel, estimateCost } from '../site/models.js';
+import { CONTINUE_INSTRUCTION } from '../worker/src/openrouter.js';
 
 const DEFAULT_PORT = 8788;
 const DEFAULT_TOKEN_MS = 60;
@@ -41,19 +43,29 @@ const words = (s) => s.match(/\s*\S+/g) || [];
 const pickContinuation = (prompt) => (CONTINUATIONS.find(c => c.test.test(prompt)) || CONTINUATIONS.at(-1)).text;
 
 const contentText = (m) => (typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? ''));
+const chatMessages = (body) => (Array.isArray(body.messages) ? body.messages.filter(m => m && typeof m === 'object') : []);
+/** Everything sent, for the fake prompt-token count. */
 function promptText(body, kind) {
   if (kind === 'chat') {
     if (!Array.isArray(body.messages)) return typeof body.messages === 'string' ? body.messages : '';
-    return body.messages.map(contentText).join('\n');
+    return chatMessages(body).map(contentText).join('\n');
   }
   return Array.isArray(body.prompt) ? body.prompt.join('\n') : String(body.prompt ?? '');
 }
-/** Text the client has already written, which the continuation must not repeat: the trailing assistant message of a
- *  chat request, or the whole prompt of a completion request (the Worker appends the prefix to it). */
+/** What the canned continuation is picked from: the user's own words. Assistant text and the Worker's continue
+ *  instruction are left out so a resumed run picks the same continuation as the fresh one did. */
+function pickText(body, kind) {
+  if (kind !== 'chat') return promptText(body, kind);
+  const own = chatMessages(body).filter(m => m.role !== 'assistant' && contentText(m) !== CONTINUE_INSTRUCTION);
+  return own.length ? own.map(contentText).join('\n') : promptText(body, kind);
+}
+/** Text the client has already written, which the continuation must not repeat: the last assistant message of a chat
+ *  request (the Worker follows it with a "continue" user message), or the whole prompt of a completion request (the
+ *  Worker appends the prefix to it). */
 function prefixText(body, kind) {
   if (kind === 'chat') {
-    const last = Array.isArray(body.messages) ? body.messages.at(-1) : null;
-    return last?.role === 'assistant' ? contentText(last) : '';
+    const last = chatMessages(body).findLast(m => m.role === 'assistant');
+    return last ? contentText(last) : '';
   }
   return promptText(body, kind);
 }
@@ -83,7 +95,7 @@ const legacyLogprobs = (top) => ({ tokens: [top[0].token], token_logprobs: [top[
 function plan(body, kind) {
   const prompt = promptText(body, kind);
   const prefix = prefixText(body, kind);
-  let all = words(pickContinuation(prompt));
+  let all = words(pickContinuation(pickText(body, kind)));
   let start = coveredTokens(all, prefix);
   if (start === all.length) { all = words(CONTINUATIONS.at(-1).text); start = coveredTokens(all, prefix); } // the canned text is used up: move on to the generic one
   const remaining = all.length - start;

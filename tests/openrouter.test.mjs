@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { buildUpstream, normalizeUpstream, parseSSE } from '../worker/src/openrouter.js';
+import { buildUpstream, normalizeUpstream, parseSSE, CONTINUE_INSTRUCTION } from '../worker/src/openrouter.js';
 import { getModel } from '../site/models.js';
 
 const fx = (n) => readFile(new URL(`./fixtures/${n}`, import.meta.url), 'utf8');
@@ -23,14 +23,35 @@ test('buildUpstream: always asks upstream to stream, even when the client asked 
   const c = { ...base, model: getModel('openai/gpt-3.5-turbo-instruct'), stream: false };
   assert.equal(buildUpstream(c, 'x').body.stream, true);
 });
-test('buildUpstream: system and prefix become system + partial assistant messages', () => {
+test('buildUpstream: system and prefix become system + assistant-so-far + an explicit continue instruction', () => {
   const v = { ...base, model: getModel('openai/gpt-4o-mini'), system: 'Be brief.', prefix: ' A CT' };
   const { body } = buildUpstream(v, 'x');
   assert.deepEqual(body.messages, [
     { role: 'system', content: 'Be brief.' },
     { role: 'user', content: 'The patient presented with' },
     { role: 'assistant', content: ' A CT' },
+    { role: 'user', content: CONTINUE_INSTRUCTION },
   ]);
+  assert.equal(body.messages.length, 4);
+});
+test('buildUpstream: chat prefix without a system prompt is user, assistant, continue; no prefix means no continue message', () => {
+  const { body } = buildUpstream({ ...base, model: getModel('anthropic/claude-haiku-4.5'), prefix: ' A CT' }, 'x');
+  assert.deepEqual(body.messages.map(m => m.role), ['user', 'assistant', 'user']);
+  assert.equal(body.messages.at(-1).content, CONTINUE_INSTRUCTION);
+  assert.match(CONTINUE_INSTRUCTION, /continue/i);
+  const plain = buildUpstream({ ...base, model: getModel('anthropic/claude-haiku-4.5') }, 'x').body;
+  assert.deepEqual(plain.messages.map(m => m.role), ['user']);
+});
+test('buildUpstream: per-model upstream params drop omitted keys and merge extras (gpt-5-mini)', () => {
+  const { body } = buildUpstream({ ...base, model: getModel('openai/gpt-5-mini'), topLogprobs: 0 }, 'x');
+  assert.equal('temperature' in body, false);
+  assert.equal(body.reasoning?.effort, 'minimal');
+  assert.equal(body.max_tokens, 50); assert.equal(body.stream, true); assert.equal(body.model, 'openai/gpt-5-mini');
+  // Other models are untouched.
+  const other = buildUpstream({ ...base, model: getModel('openai/gpt-4o-mini') }, 'x').body;
+  assert.equal(other.temperature, 0.7); assert.equal('reasoning' in other, false);
+  const legacy = buildUpstream({ ...base, model: getModel('openai/gpt-3.5-turbo-instruct') }, 'x').body;
+  assert.equal(legacy.temperature, 0.7); assert.equal('reasoning' in legacy, false);
 });
 test('buildUpstream: no logprobs fields for models that lack them', () => {
   const v = { ...base, model: getModel('anthropic/claude-haiku-4.5'), topLogprobs: 0 };
@@ -102,6 +123,36 @@ test('normalize maps an upstream error object to a fixed message keyed on code, 
   const other = await errOf(500);
   assert.equal(other[0].message, 'The model returned an error. Try another model.');
   assert.doesNotMatch(JSON.stringify(other), /internal detail/);
+});
+
+test('normalize: a chat chunk carrying BOTH delta.content and logprobs.content emits one event per logprob entry, not both', async () => {
+  const body = 'data: {"choices":[{"delta":{"content":" CT scan"},"logprobs":{"content":[{"token":" CT","logprob":-0.5,"top_logprobs":[]},{"token":" scan","logprob":-0.1,"top_logprobs":[]}]}}]}\n\ndata: [DONE]\n\n';
+  const ev = await collectText(body, 'openai/gpt-4o-mini');
+  assert.deepEqual(ev.filter(e => e.type === 'token').map(e => e.text), [' CT', ' scan']);
+  assert.equal(ev.at(-1).usage.completion, 2);
+});
+test('normalize: a chat chunk with delta.content and an empty logprobs.content emits the delta text once', async () => {
+  const body = 'data: {"choices":[{"delta":{"content":" CT"},"logprobs":{"content":[]}}]}\n\ndata: [DONE]\n\n';
+  const ev = await collectText(body, 'openai/gpt-4o-mini');
+  assert.deepEqual(ev.filter(e => e.type === 'token'), [{ type: 'token', text: ' CT', logprob: null, top: null }]);
+});
+test('normalize: the completion endpoint also accepts a chat-shaped logprobs.content[] (OpenRouter may normalize)', async () => {
+  const body = 'data: {"choices":[{"text":" chest","logprobs":{"content":[{"token":" chest","logprob":-0.3,"top_logprobs":[{"token":" chest","logprob":-0.3},{"token":" CT","logprob":-1.5}]}]},"finish_reason":null}]}\n\ndata: [DONE]\n\n';
+  const ev = await collectText(body, 'openai/gpt-3.5-turbo-instruct');
+  assert.equal(ev[0].text, ' chest'); assert.equal(ev[0].logprob, -0.3);
+  assert.deepEqual(ev[0].top, [{ text: ' chest', logprob: -0.3 }, { text: ' CT', logprob: -1.5 }]);
+  assert.equal(ev.filter(e => e.type === 'token').length, 1);
+});
+test('normalize: an unparseable payload is skipped and the warning logs only its length, never its content', async () => {
+  const orig = console.warn; const calls = [];
+  console.warn = (...a) => calls.push(a.map(String).join(' '));
+  try {
+    const ev = await collectText('data: {"secret":"patient-name-here"\n\ndata: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n', 'anthropic/claude-haiku-4.5');
+    assert.deepEqual(ev.filter(e => e.type === 'token').map(e => e.text), ['ok']);
+  } finally { console.warn = orig; }
+  assert.equal(calls.length, 1);
+  assert.doesNotMatch(calls[0], /patient-name-here|secret/);
+  assert.match(calls[0], /\b29\b/, 'reports the payload length');
 });
 
 // I1: no usage block → estimate from what we saw; no [DONE] → finish 'truncated'

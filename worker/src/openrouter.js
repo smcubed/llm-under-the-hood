@@ -4,32 +4,47 @@ import { parseSSE } from '../../site/sse.js';
 // One copy of the SSE splitter serves both the Worker and the browser client (site/api.js).
 export { parseSSE };
 
+/** Chat models do not reliably continue a trailing assistant message (OpenAI ones tend to start over), so a resumed or
+ *  forked run sends the text so far as the assistant turn and then asks, in a user turn, for the continuation only. */
+export const CONTINUE_INSTRUCTION = 'Continue your previous message exactly where it left off. Do not repeat any of it and do not add a preamble. Output only the continuation.';
+
+/** Per-model request shaping from `model.upstream`: drop `omit`ted keys, then shallow-merge `extra` over the body. */
+function applyUpstream(model, body) {
+  const u = model.upstream;
+  if (!u) return body;
+  for (const k of u.omit || []) delete body[k];
+  return { ...body, ...(u.extra || {}) };
+}
+
 export function buildUpstream(v, baseUrl) {
   const m = v.model;
   // Always stream upstream so one code path handles every model; the router collects events when the client asked for stream:false.
   const common = { model: m.id, max_tokens: v.maxTokens, temperature: v.temperature, stream: true, usage: { include: true } };
   if (m.endpoint === 'completion') {
+    // A completion model continues text by construction: the prefix is simply appended to the prompt.
     const prompt = (v.system ? v.system + '\n\n' : '') + v.prompt + v.prefix;
     const body = { ...common, prompt };
     if (m.logprobs && v.topLogprobs > 0) body.logprobs = v.topLogprobs;
-    return { url: `${baseUrl}/completions`, body };
+    return { url: `${baseUrl}/completions`, body: applyUpstream(m, body) };
   }
   const messages = [];
   if (v.system) messages.push({ role: 'system', content: v.system });
   messages.push({ role: 'user', content: v.prompt });
-  if (v.prefix) messages.push({ role: 'assistant', content: v.prefix });
+  if (v.prefix) messages.push({ role: 'assistant', content: v.prefix }, { role: 'user', content: CONTINUE_INSTRUCTION });
   const body = { ...common, messages };
   if (m.logprobs && v.topLogprobs > 0) { body.logprobs = true; body.top_logprobs = v.topLogprobs; }
-  return { url: `${baseUrl}/chat/completions`, body };
+  return { url: `${baseUrl}/chat/completions`, body: applyUpstream(m, body) };
 }
+
+// Chat-shaped logprobs (`logprobs.content[]`) carry the text too, so when they are present they are the only source of
+// token events; the delta text is not emitted again. Without them, the plain text becomes one untinted token.
+const fromChatLogprobs = (entries) => entries.map(e => ({ type: 'token', text: e.token, logprob: e.logprob, top: (e.top_logprobs || []).map(t => ({ text: t.token, logprob: t.logprob })) }));
+const plainToken = (text) => (text ? [{ type: 'token', text, logprob: null, top: null }] : []);
 
 function chatTokens(choice) {
   const lp = choice.logprobs?.content;
-  if (Array.isArray(lp) && lp.length) {
-    return lp.map(e => ({ type: 'token', text: e.token, logprob: e.logprob, top: (e.top_logprobs || []).map(t => ({ text: t.token, logprob: t.logprob })) }));
-  }
-  const text = choice.delta?.content;
-  return text ? [{ type: 'token', text, logprob: null, top: null }] : [];
+  if (Array.isArray(lp) && lp.length) return fromChatLogprobs(lp);
+  return plainToken(choice.delta?.content);
 }
 
 function completionTokens(choice) {
@@ -40,7 +55,9 @@ function completionTokens(choice) {
       top: lp.top_logprobs?.[i] ? Object.entries(lp.top_logprobs[i]).map(([text, logprob]) => ({ text, logprob })).sort((a, b) => b.logprob - a.logprob) : null,
     }));
   }
-  return choice.text ? [{ type: 'token', text: choice.text, logprob: null, top: null }] : [];
+  // OpenRouter may normalize the legacy shape to the chat one.
+  if (Array.isArray(lp?.content) && lp.content.length) return fromChatLogprobs(lp.content);
+  return plainToken(choice.text);
 }
 
 const UPSTREAM_ERROR_MESSAGES = {
@@ -63,7 +80,7 @@ export async function* normalizeUpstream(stream, model, { promptChars = 0 } = {}
   const toEvents = (raw) => {
     if (raw.trim() === '[DONE]') { sawDone = true; return []; }
     let json;
-    try { json = JSON.parse(raw); } catch { console.warn('openrouter: skipping unparseable SSE payload', raw.slice(0, 200)); return []; }
+    try { json = JSON.parse(raw); } catch { console.warn('openrouter: skipping unparseable SSE payload', `${raw.length} chars`); return []; } // length only: the payload could echo prompt text
     if (json.error) {
       console.error('openrouter: upstream error', JSON.stringify(json.error).slice(0, 500));
       errored = true;

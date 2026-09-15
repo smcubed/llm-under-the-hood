@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startMock, coveredTokens } from '../tools/mock_openrouter.mjs';
-import { parseSSE } from '../worker/src/openrouter.js';
+import { parseSSE, CONTINUE_INSTRUCTION } from '../worker/src/openrouter.js';
 import { getModel, estimateCost } from '../site/models.js';
 
 // Ephemeral port; fast token cadence so the suite stays quick (the real default is ~60 ms per token).
@@ -118,6 +118,12 @@ test('a prefix the client already wrote is not repeated: chat assistant message,
     const exhausted = await first({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }, { role: 'assistant', content: whole }] });
     assert.ok(exhausted.length >= 10, 'a used-up continuation moves on to the generic text instead of ending empty');
     assert.equal(exhausted[0], ' the');
+    // The Worker's continuation shape: the assistant-so-far is followed by a "continue" user message. The prefix is
+    // still found (last assistant message, not the trailing one) and the instruction does not steer the canned pick.
+    const continued = await first({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }, { role: 'assistant', content: ' a CT scan' }, { role: 'user', content: CONTINUE_INSTRUCTION }] });
+    assert.deepEqual(continued.slice(0, 3), [' of', ' the', ' chest,'], 'picks up after a non-trailing assistant prefix');
+    const question = await first({ model: 'anthropic/claude-haiku-4.5', messages: [{ role: 'user', content: 'Why is the sky blue?' }, { role: 'assistant', content: ' Good question.' }, { role: 'user', content: CONTINUE_INSTRUCTION }] });
+    assert.deepEqual(question.slice(0, 3), [' The', ' short', ' answer'], 'the continue instruction is ignored when picking the canned text');
     // A resumed stream continues the confidence cycle rather than restarting it at "green".
     const res = await post(base, '/chat/completions', { model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }, { role: 'assistant', content: ' a' }], stream: true, logprobs: true, top_logprobs: 5 });
     const chunks = (await readSSE(res)).slice(0, -1).map(e => JSON.parse(e));
