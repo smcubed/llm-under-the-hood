@@ -145,7 +145,7 @@ test('errors show a notice whose Retry resumes from the current text; stop() mar
   const root = dom.document.createElement('div');
   dom.document.body.append(root);
   const errors = [];
-  const pane = createOutputPane(root, { getModel: () => getModel('anthropic/claude-haiku-4.5'), forkable: false, onError: (m, fromStream) => errors.push([m, fromStream]) });
+  const pane = createOutputPane(root, { getModel: () => getModel('anthropic/claude-haiku-5.5'), forkable: false, onError: (m, fromStream) => errors.push([m, fromStream]) });
   const chips = () => root.querySelectorAll('.out-chips .chip');
   assert.ok(root.querySelector('.considered'), 'the side panel is on by default');
 
@@ -188,7 +188,7 @@ test('errors show a notice whose Retry resumes from the current text; stop() mar
 test('forkable panes fork themselves when no onFork is given, and setTokens/setPrompt/setConfidence render directly', async () => {
   const root = dom.document.createElement('div');
   dom.document.body.append(root);
-  const pane = createOutputPane(root, { getModel: () => getModel('openai/gpt-3.5-turbo-instruct'), completionNote: 'It continues.', getPrefixText: () => 'The patient' });
+  const pane = createOutputPane(root, { getModel: () => getModel('meta-llama/llama-3.1-8b-instruct'), completionNote: 'It continues.', getPrefixText: () => 'The patient' });
   const chips = () => root.querySelectorAll('.out-chips .chip');
   pane.setPrompt('The patient');
   assert.ok(root.querySelector('.out-line').classList.contains('is-completion'));
@@ -201,7 +201,7 @@ test('forkable panes fork themselves when no onFork is given, and setTokens/setP
   assert.ok(root.querySelector('.out-line').classList.contains('confidence-off'));
 
   script(sse([tok(' seen', -0.2, null), done()]));
-  pane.start(ctxOf(), { ...params, model: 'openai/gpt-3.5-turbo-instruct', prefix: ' was' });
+  pane.start(ctxOf(), { ...params, model: 'meta-llama/llama-3.1-8b-instruct', prefix: ' was' });
   await waitFor(() => pane.phase === 'done');
   chips()[0].dispatch('keydown', { key: 'Enter', preventDefault() {} });
   const alts = dom.document.body.querySelector('.popover').querySelectorAll('.fork-alt');

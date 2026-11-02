@@ -37,17 +37,28 @@ function applyUpstream(model, body) {
   return { ...body, ...(u.extra || {}) };
 }
 
+/** The frame that makes a chat model behave like a pre-ChatGPT completion model for chapter 5's left pane. The few-shot
+ *  pairs matter more than the instruction: they show continuing mid-sentence, and continuing a question with more text
+ *  (what a base model does) rather than answering it. Each example continuation starts with a space, as base-model
+ *  tokens do. */
+export const AUTOCOMPLETE_FRAME = 'You are a text-continuation engine, like the autocomplete on a phone keyboard. Each user message is a fragment of a longer document. Reply with only the words that come next in that document, picking up exactly where the fragment stops, even mid-sentence. Never answer, explain, greet, comment on, or repeat the fragment.';
+export const AUTOCOMPLETE_EXAMPLES = Object.freeze([
+  ['The nurse checked his blood pressure and', ' found it was 150 over 95, higher than at his last visit. She asked whether he had taken his morning dose of'],
+  ['What is the normal resting heart rate for adults?', ' What is it for children? How does exercise change it? This chapter answers each of these questions in turn, starting with'],
+]);
+
 export function buildUpstream(v, baseUrl) {
   const m = v.model;
-  // OpenRouter's current API has one endpoint for every model, chat- or completion-style: there is no separate
-  // legacy /completions route any more (confirmed 2026-09-15 against openrouter.ai/openapi.json, and the hard way,
-  // against a live "Missing required parameter: 'prompt'" 400 from a real gpt-3.5-turbo-instruct call). A
-  // completion model is called the same way, wrapped in a single user message.
+  // OpenRouter's current API has one endpoint for every model, chat- or completion-style (the older /completions route
+  // rejected gpt-3.5-turbo-instruct with a 400 on 2026-09-15), so every model is called through /chat/completions.
   const common = { model: m.id, max_tokens: v.maxTokens, temperature: v.temperature, stream: true, usage: { include: true } };
   const messages = [];
   if (m.endpoint === 'completion') {
-    // No chat structure: fold system + prompt + prefix into one turn so the model just continues raw text, the
-    // way a completions call would. Fork/resume append straight into this same text, not a fresh turn.
+    // Simulated autocomplete: a fixed frame and examples, then the student's text as one fragment. The student's system
+    // prompt is folded into that fragment, the way a raw completion model would see it: as more text, not as instructions.
+    // Fork/resume append straight into this same fragment, not a fresh turn.
+    messages.push({ role: 'system', content: AUTOCOMPLETE_FRAME });
+    for (const [fragment, next] of AUTOCOMPLETE_EXAMPLES) messages.push({ role: 'user', content: fragment }, { role: 'assistant', content: next });
     messages.push({ role: 'user', content: (v.system ? v.system + '\n\n' : '') + v.prompt + v.prefix });
   } else {
     if (v.system) messages.push({ role: 'system', content: v.system });
@@ -63,6 +74,8 @@ export function buildUpstream(v, baseUrl) {
 // token events; the delta text is not emitted again. Without them, the plain text becomes one untinted token.
 const fromChatLogprobs = (entries) => entries.map(e => ({ type: 'token', text: e.token, logprob: e.logprob, top: (e.top_logprobs || []).map(t => ({ text: t.token, logprob: t.logprob })) }));
 const plainToken = (text) => (text ? [{ type: 'token', text, logprob: null, top: null }] : []);
+const withLeadSpace = (text) => (/^[\s.,;:!?)\]}'"’”-]/.test(text) ? text : ' ' + text);
+const spaced = (tok) => ({ text: withLeadSpace(tok.text), top: tok.top && tok.top.map(t => ({ ...t, text: withLeadSpace(t.text) })) });
 
 function chatTokens(choice) {
   const lp = choice.logprobs?.content;
@@ -80,11 +93,14 @@ const upstreamErrorMessage = (code) => UPSTREAM_ERROR_MESSAGES[Number(code)] || 
  * Async generator: upstream SSE ReadableStream → normalized events.
  * Always ends with a `done` event, even after an error, so the caller can reconcile spend.
  * When upstream omits usage, tokens are estimated: completion = tokens yielded, prompt = ceil(promptChars / 3).
+ * `leadSpace`: the text being continued ends in a non-space, so the first token (and its alternatives) gets a leading
+ * space unless it already starts with whitespace or closing punctuation. Chat models start replies without one, which
+ * would glue a simulated-autocomplete continuation onto the last word ("andshortness").
  */
-export async function* normalizeUpstream(stream, model, { promptChars = 0 } = {}) {
+export async function* normalizeUpstream(stream, model, { promptChars = 0, leadSpace = false } = {}) {
   const reader = stream.getReader();
   const dec = new TextDecoder();
-  let buf = '', usage = null, finish = null, sawDone = false, tokenCount = 0, errored = false, exhausted = false;
+  let buf = '', usage = null, finish = null, sawDone = false, tokenCount = 0, errored = false, exhausted = false, needSpace = leadSpace;
 
   // Turn one raw `data:` payload into zero or more normalized events, updating the closure state.
   const toEvents = (raw) => {
@@ -101,6 +117,10 @@ export async function* normalizeUpstream(stream, model, { promptChars = 0 } = {}
     for (const choice of json.choices || []) {
       if (choice.finish_reason) finish = choice.finish_reason;
       const toks = chatTokens(choice);
+      if (needSpace) {
+        const first = toks.find(t => t.text);
+        if (first) { needSpace = false; Object.assign(first, spaced(first)); }
+      }
       tokenCount += toks.length;
       out.push(...toks);
     }

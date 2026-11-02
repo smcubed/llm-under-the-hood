@@ -34,7 +34,7 @@ test('defaults: maxTokens 120, temperature 0.7, topLogprobs 5, stream true', () 
   assert.deepEqual([r.value.maxTokens, r.value.temperature, r.value.topLogprobs, r.value.stream], [120, 0.7, 5, true]);
 });
 test('forces topLogprobs to 0 for models without logprobs', () => {
-  const r = validateGenerate({ ...good, model: 'anthropic/claude-haiku-4.5' });
+  const r = validateGenerate({ ...good, model: 'anthropic/claude-haiku-5.5' });
   assert.equal(r.value.topLogprobs, 0);
 });
 test('rejects non-object and non-string fields', () => {

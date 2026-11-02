@@ -4,11 +4,14 @@
 // A prefix the client has already written (the last assistant message, or a completion prompt ending in canned text) is
 // not repeated: the stream picks up where the canned text left off. The Worker's "continue" user message that follows
 // the assistant text is ignored when choosing the canned continuation.
+// The Worker's simulated-autocomplete request (system AUTOCOMPLETE_FRAME, few-shot pairs, then one fragment) is treated as
+// a completion prompt: only the final fragment is the student's text, and it already ends with any prefix. Like a real
+// chat model, the reply's first token (and its alternatives) comes back without a leading space; the Worker restores it.
 import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { getModel, estimateCost } from '../site/models.js';
-import { CONTINUE_INSTRUCTION } from '../worker/src/openrouter.js';
+import { CONTINUE_INSTRUCTION, AUTOCOMPLETE_FRAME } from '../worker/src/openrouter.js';
 
 const DEFAULT_PORT = 8788;
 const DEFAULT_TOKEN_MS = 60;
@@ -44,6 +47,9 @@ const pickContinuation = (prompt) => (CONTINUATIONS.find(c => c.test.test(prompt
 
 const contentText = (m) => (typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? ''));
 const chatMessages = (body) => (Array.isArray(body.messages) ? body.messages.filter(m => m && typeof m === 'object') : []);
+const isAutocomplete = (body) => { const first = chatMessages(body)[0]; return first?.role === 'system' && first.content === AUTOCOMPLETE_FRAME; };
+/** The student's fragment in a simulated-autocomplete request: the last user message. */
+const fragmentText = (body) => contentText(chatMessages(body).findLast(m => m.role === 'user'));
 /** Everything sent, for the fake prompt-token count. */
 function promptText(body, kind) {
   if (kind === 'chat') {
@@ -56,13 +62,15 @@ function promptText(body, kind) {
  *  instruction are left out so a resumed run picks the same continuation as the fresh one did. */
 function pickText(body, kind) {
   if (kind !== 'chat') return promptText(body, kind);
+  if (isAutocomplete(body)) return fragmentText(body);
   const own = chatMessages(body).filter(m => m.role !== 'assistant' && contentText(m) !== CONTINUE_INSTRUCTION);
   return own.length ? own.map(contentText).join('\n') : promptText(body, kind);
 }
 /** Text the client has already written, which the continuation must not repeat: the last assistant message of a chat
- *  request (the Worker follows it with a "continue" user message), or the whole prompt of a completion request (the
- *  Worker appends the prefix to it). */
+ *  request (the Worker follows it with a "continue" user message), or the whole prompt of a completion request or the
+ *  fragment of a simulated-autocomplete one (the Worker appends the prefix to it). */
 function prefixText(body, kind) {
+  if (kind === 'chat' && isAutocomplete(body)) return fragmentText(body);
   if (kind === 'chat') {
     const last = chatMessages(body).findLast(m => m.role === 'assistant');
     return last ? contentText(last) : '';
@@ -110,12 +118,20 @@ function plan(body, kind) {
   const price = model?.price || FALLBACK_PRICE;
   const cost = estimateCost({ price }, promptTokens, n);
   const usage = { prompt_tokens: promptTokens, completion_tokens: n, total_tokens: promptTokens + n, cost };
-  return { tokens, all, start, finish, wantLogprobs, usage, id: `${kind === 'chat' ? 'gen' : 'cmpl'}-mock-${Date.now().toString(36)}`, model: body.model };
+  const unspaced = kind === 'chat' && isAutocomplete(body);
+  return { tokens, all, start, finish, wantLogprobs, unspaced, usage, id: `${kind === 'chat' ? 'gen' : 'cmpl'}-mock-${Date.now().toString(36)}`, model: body.model };
+}
+
+/** Token `i` of the reply and its alternatives (null without logprobs). The first token of a simulated-autocomplete reply,
+ *  and each of its alternatives, loses its leading space, as a real chat model's does. */
+function step(p, i) {
+  const top = p.wantLogprobs ? topFive(p.tokens[i], p.start + i, p.all) : null;
+  if (!(p.unspaced && i === 0)) return { token: p.tokens[i], top };
+  return { token: p.tokens[i].trimStart(), top: top && top.map(t => ({ ...t, token: t.token.trimStart() })) };
 }
 
 function chunk(p, kind, i) {
-  const token = p.tokens[i];
-  const top = p.wantLogprobs ? topFive(token, p.start + i, p.all) : null;
+  const { token, top } = step(p, i);
   const base = { id: p.id, object: kind === 'chat' ? 'chat.completion.chunk' : 'text_completion', created: Math.floor(Date.now() / 1000), model: p.model };
   if (kind === 'chat') return { ...base, choices: [{ index: 0, delta: { content: token }, logprobs: top ? chatLogprobs(top) : null, finish_reason: null }] };
   return { ...base, choices: [{ index: 0, text: token, logprobs: top ? legacyLogprobs(top) : null, finish_reason: null }] };
@@ -126,8 +142,9 @@ function finalChunk(p, kind) {
   return { ...base, choices: [{ index: 0, text: '', logprobs: p.wantLogprobs ? { tokens: [], token_logprobs: [], top_logprobs: [], text_offset: [] } : null, finish_reason: p.finish }] };
 }
 function wholeCompletion(p, kind) {
-  const text = p.tokens.join('');
-  const tops = p.wantLogprobs ? p.tokens.map((t, i) => topFive(t, p.start + i, p.all)) : null;
+  const steps = p.tokens.map((_, i) => step(p, i));
+  const text = steps.map(st => st.token).join('');
+  const tops = p.wantLogprobs ? steps.map(st => st.top) : null;
   const base = { id: p.id, created: Math.floor(Date.now() / 1000), model: p.model, usage: p.usage };
   if (kind === 'chat') {
     const logprobs = tops ? { content: tops.map(top => ({ token: top[0].token, logprob: top[0].logprob, bytes: null, top_logprobs: top })) } : null;

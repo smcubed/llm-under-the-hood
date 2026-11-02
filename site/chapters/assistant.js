@@ -1,6 +1,6 @@
 /**
- * Chapter 5: from autocomplete to assistant. Two panes run the same prompt on every runId: the left one on the 2022
- * completion model (it continues the text), the right one on the student's chosen chat model (it answers). A system
+ * Chapter 5: from autocomplete to assistant. Two panes run the same prompt on every runId: the left one on the simulated
+ * autocomplete model (a small chat model the Worker frames to continue text; the real completion models are retired), the right one on the student's chosen chat model (it answers). A system
  * prompt control above the panes (presets or a custom instruction) writes `store.system`, which chapters 4 and 6 also
  * use, and "Run both again" re-runs just these two panes with it. Each pane footer shows latency, tokens and cost, plus
  * the model's first three guesses for its first token when it shares them. Follows the chapter contract in tokens.js;
@@ -12,8 +12,8 @@ import { createRun } from '../run.js';
 import { createOutputPane } from '../pane.js';
 import { tokenLabelText } from '../bars.js';
 
-export const LEFT_LABEL = 'GPT-3.5 Instruct, 2022 (autocomplete)';
-export const LEFT_CAPTION = 'It continued your text. It was never taught to answer.';
+export const LEFT_LABEL = 'Autocomplete mode (simulated)';
+export const LEFT_CAPTION = 'Early models like GPT-3 could only continue text. They are retired, so a small modern model is told to act like one. It continues your text instead of answering.';
 export const RIGHT_CAPTION = 'Trained afterwards on examples of helpful answers, so it treats your text as a request.';
 export const IDLE_NOTE = 'Press "Run it" above and both models take your prompt here.';
 export const MAX_TOKENS = 80;
@@ -28,7 +28,7 @@ export const SYSTEM_PRESETS = Object.freeze([
 
 // ---- Pure helpers (tested in tests/assistant_chapter.test.mjs) -----------------------------------------------------
 
-/** The chat model for the right pane: the chosen one, unless that is the instruct model (or unknown), then the default. */
+/** The chat model for the right pane: the chosen one, unless that is the autocomplete model (or unknown), then the default. */
 export function pickAssistantModel(chosenId) {
   if (!chosenId || chosenId === AUTOCOMPLETE_MODEL || !getModel(chosenId)) return DEFAULT_MODEL;
   return chosenId;

@@ -223,20 +223,20 @@ test('HTTP and stream errors show a notice whose Retry re-issues the last action
 });
 
 test('a model without probabilities still makes the one-token call (publishing usage), shows the card, disables slider/roll/toggle, and writes; the card clears on the next run', async () => {
-  const { store, q, button, chips } = mountChapter('anthropic/claude-haiku-4.5');
+  const { store, q, button, chips } = mountChapter('anthropic/claude-haiku-5.5');
   script(sse([tok(' Sure', null, null), done()]));
   store.set({ runId: 1 });
   await waitFor(() => q('.nolog-card').hidden === false);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].body.maxTokens, 1);
-  assert.equal(q('.nolog-card').textContent, 'Haiku 4.5 does not share its probabilities. You can still watch it write.');
+  assert.equal(q('.nolog-card').textContent, 'Haiku 5.5 does not share its probabilities. You can still watch it write.');
   assert.equal(q('.bars').hidden, true);
   assert.equal(q('input[type=range]').disabled, true);
   assert.equal(button('🎲 Roll the dice').disabled, true);
   assert.match(button('🎲 Roll the dice').title, /does not share its probabilities/);
   assert.equal(q('input[type=checkbox]').disabled, true);
   assert.equal(button('Keep going').disabled, false);
-  assert.deepEqual(store.get().results.predict, { runId: 1, usage: { prompt: 5, completion: 1 }, cost: 0.0001, model: 'anthropic/claude-haiku-4.5' }, 'usage is published from the first call even without probabilities');
+  assert.deepEqual(store.get().results.predict, { runId: 1, usage: { prompt: 5, completion: 1 }, cost: 0.0001, model: 'anthropic/claude-haiku-5.5' }, 'usage is published from the first call even without probabilities');
   assert.equal(chips().length, 0, 'the probe token is not shown as output');
   script(sse([tok(' Sure', null, null), tok(',', null, null), done()]));
   button('Keep going').dispatch('click');
@@ -256,13 +256,13 @@ test('a model without probabilities still makes the one-token call (publishing u
 });
 
 test('a completion model renders prompt and output as one line with the note', async () => {
-  const { store, q, bigBars } = mountChapter('openai/gpt-3.5-turbo-instruct');
+  const { store, q, bigBars } = mountChapter('meta-llama/llama-3.1-8b-instruct');
   script(sse([tok(' CT', TOP[0].logprob, TOP), done()]));
   store.set({ runId: 1 });
   await waitFor(() => bigBars().length === 4);
   assert.ok(q('.out-line').classList.contains('is-completion'));
   assert.equal(q('.out-block p.muted.small:not(.status)').hidden, false);
-  assert.equal(q('.out-block p.muted.small:not(.status)').textContent, 'This model just continues the text.');
+  assert.equal(q('.out-block p.muted.small:not(.status)').textContent, 'This model is set up to just continue the text, like early autocomplete models.');
 });
 
 test('the dice animation runs by default and is skipped when the student prefers reduced motion', async () => {

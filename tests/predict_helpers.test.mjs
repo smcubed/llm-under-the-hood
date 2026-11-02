@@ -22,6 +22,6 @@ test('barsCaption says whether the bars are raw or rescaled', () => {
 });
 
 test('no-probability messages use the model\'s short name', () => {
-  assert.equal(noProbsMessage(getModel('anthropic/claude-haiku-4.5')), 'Haiku 4.5 does not share its probabilities. You can still watch it write.');
+  assert.equal(noProbsMessage(getModel('anthropic/claude-haiku-5.5')), 'Haiku 5.5 does not share its probabilities. You can still watch it write.');
   assert.equal(noProbsThisTime(getModel('openai/gpt-4o-mini')), 'GPT-4o mini did not return any probabilities this time. You can still watch it write.');
 });

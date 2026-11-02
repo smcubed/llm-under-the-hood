@@ -8,7 +8,7 @@ Development helpers. None of these ship to the Worker or the site.
 
 What it does:
 
-- `POST /chat/completions` and `POST /completions` read the JSON body and stream a canned, prompt-aware continuation as SSE, one word-ish token every ~60 ms (`MOCK_TOKEN_MS` overrides), ending with `data: [DONE]`. A clinical-sounding prompt gets a clinical continuation, a question gets an answer-shaped one, and so on, so the UI looks alive.
+- `POST /chat/completions` and `POST /completions` read the JSON body (the Worker only calls `/chat/completions` now; `/completions` stays for the mock's own tests) and stream a canned, prompt-aware continuation as SSE, one word-ish token every ~60 ms (`MOCK_TOKEN_MS` overrides), ending with `data: [DONE]`. A clinical-sounding prompt gets a clinical continuation, a question gets an answer-shaped one, and so on, so the UI looks alive.
 - Between 10 and 20 tokens; `max_tokens: 1` sends exactly one token (and `finish_reason: "length"`).
 - A prefix the client already wrote is not repeated: if the chat request ends with an `assistant` message, or the completion prompt ends with the start of the canned text, the stream picks up where that text left off (so "Keep going", Pause/Resume and forks in chapter 4 read naturally). A prefix that used up the whole canned text moves on to the generic continuation.
 - If the body asks for `logprobs`, each token carries five alternatives, chosen token first, in the chat shape (`choices[0].logprobs.content[0].top_logprobs`) or the legacy completions shape (`logprobs.tokens / token_logprobs / top_logprobs` maps). The chosen token's logprob cycles by position through `-0.1, -0.6, -1.5, -2.3` (about 90%, 55%, 22%, 10%), so the confidence bands show green, amber and red, and the other four decay so the five shown never sum above 0.95 (the bar chart keeps an "everything else" remainder).
@@ -43,9 +43,11 @@ curl -i localhost:8787/api/session -H "cookie: $COOKIE"
 curl -N -X POST localhost:8787/api/generate -H 'content-type: application/json' -H "cookie: $COOKIE" \
   -d '{"model":"openai/gpt-4o-mini","prompt":"The patient presented with"}'
 
-# legacy completions model: the mock logs "completion openai/gpt-3.5-turbo-instruct", same event shape, cost 0.0000505
+# simulated autocomplete model (chapter 5's left pane): same event shape. On 2026-09-14 this line used the
+# now-retired GPT-3.5 Instruct model; since 2026-11-02 the Worker sends it to /chat/completions like every other
+# model, so the mock logs "chat meta-llama/llama-3.1-8b-instruct" (not re-run since the change)
 curl -N -X POST localhost:8787/api/generate -H 'content-type: application/json' -H "cookie: $COOKIE" \
-  -d '{"model":"openai/gpt-3.5-turbo-instruct","prompt":"The patient presented with"}'
+  -d '{"model":"meta-llama/llama-3.1-8b-instruct","prompt":"The patient presented with"}'
 
 # stream:false → {"events":[...]} as JSON
 curl -X POST localhost:8787/api/generate -H 'content-type: application/json' -H "cookie: $COOKIE" \
@@ -63,6 +65,10 @@ npx wrangler dev --port 8787 --var DAILY_BUDGET_USD:0.0000001
 ```
 
 Note: this smoke covers `/api/*`; `GET /` serves `site/index.html` (the passcode gate) and every file under `site/` is served as a static asset at the same path (for example `/vendor/o200k.js`, `/data/embeddings.json`).
+
+## `check_models.mjs` — is every model still on OpenRouter?
+
+`npm run check:models` compares the ladder in `site/models.js` with OpenRouter's public model list and needs no key. `npm run check:models -- --live` also sends a tiny request to each model through the deployed site; it asks for the class passcode and costs a few tenths of a cent, mostly GPT-4. `--live --dry-run` shows what `--live` would send and its estimated cost without sending anything, and `--models <path>` checks a different `models.js` (the default is `site/models.js`). `--help` lists the rest. Run it once a term and after any edit to `site/models.js`; HANDOFF.md ("When OpenRouter retires a model") says what to do with what it finds.
 
 ## Data builders
 

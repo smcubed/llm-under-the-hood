@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startMock, coveredTokens } from '../tools/mock_openrouter.mjs';
-import { parseSSE, CONTINUE_INSTRUCTION } from '../worker/src/openrouter.js';
-import { getModel, estimateCost } from '../site/models.js';
+import { parseSSE, CONTINUE_INSTRUCTION, buildUpstream } from '../worker/src/openrouter.js';
+import { getModel, estimateCost, AUTOCOMPLETE_MODEL } from '../site/models.js';
 
 // Ephemeral port; fast token cadence so the suite stays quick (the real default is ~60 ms per token).
 async function withMock(fn) {
@@ -18,6 +18,9 @@ async function readSSE(res) {
   return events;
 }
 const chatPrompt = 'The patient presented with';
+// The Worker no longer calls /completions (no ladder model is completion-shaped upstream), but the mock keeps the legacy
+// route. An id outside the ladder exercises it, and the mock's GPT-4o mini fallback pricing with it.
+const LEGACY_ID = 'mock/legacy-completion';
 
 test('chat: streams prompt-aware tokens with 5 top_logprobs, usage.cost on the last chunk, then [DONE]', async () => {
   await withMock(async (base) => {
@@ -58,7 +61,7 @@ test('chat: streams prompt-aware tokens with 5 top_logprobs, usage.cost on the l
 
 test('chat without logprobs: no logprobs on chunks', async () => {
   await withMock(async (base) => {
-    const res = await post(base, '/chat/completions', { model: 'anthropic/claude-haiku-4.5', messages: [{ role: 'user', content: 'Why is the sky blue?' }], stream: true });
+    const res = await post(base, '/chat/completions', { model: 'anthropic/claude-haiku-5.5', messages: [{ role: 'user', content: 'Why is the sky blue?' }], stream: true });
     const chunks = (await readSSE(res)).slice(0, -1).map(e => JSON.parse(e));
     assert.ok(chunks.filter(c => c.choices[0].delta?.content).every(c => c.choices[0].logprobs == null));
     assert.ok(chunks.at(-1).usage.cost > 0);
@@ -67,7 +70,7 @@ test('chat without logprobs: no logprobs on chunks', async () => {
 
 test('completions: legacy shape with tokens/token_logprobs/top_logprobs maps', async () => {
   await withMock(async (base) => {
-    const res = await post(base, '/completions', { model: 'openai/gpt-3.5-turbo-instruct', prompt: chatPrompt, stream: true, logprobs: 5 });
+    const res = await post(base, '/completions', { model: LEGACY_ID, prompt: chatPrompt, stream: true, logprobs: 5 });
     const events = await readSSE(res);
     assert.equal(events.at(-1), '[DONE]');
     const chunks = events.slice(0, -1).map(e => JSON.parse(e));
@@ -81,8 +84,10 @@ test('completions: legacy shape with tokens/token_logprobs/top_logprobs maps', a
       assert.equal(lp.top_logprobs[0][c.choices[0].text], lp.token_logprobs[0]);
       assert.equal(c.choices[0].delta, undefined);
     }
-    assert.equal(chunks.at(-1).usage.prompt_tokens, Math.ceil(chatPrompt.length / 4));
-    assert.ok(chunks.at(-1).usage.cost > 0);
+    const { usage } = chunks.at(-1);
+    assert.equal(usage.prompt_tokens, Math.ceil(chatPrompt.length / 4));
+    assert.ok(usage.cost > 0);
+    assert.ok(Math.abs(usage.cost - estimateCost(getModel('openai/gpt-4o-mini'), usage.prompt_tokens, usage.completion_tokens)) < 1e-15, 'unknown ids are priced like GPT-4o mini');
   });
 });
 
@@ -94,7 +99,7 @@ test('max_tokens: 1 sends exactly one token and finish_reason length', async () 
     assert.equal(tokenChunks.length, 1);
     assert.equal(chunks.at(-1).choices[0].finish_reason, 'length');
     assert.equal(chunks.at(-1).usage.completion_tokens, 1);
-    const res2 = await post(base, '/completions', { model: 'openai/gpt-3.5-turbo-instruct', prompt: chatPrompt, stream: true, max_tokens: 1 });
+    const res2 = await post(base, '/completions', { model: LEGACY_ID, prompt: chatPrompt, stream: true, max_tokens: 1 });
     const chunks2 = (await readSSE(res2)).slice(0, -1).map(e => JSON.parse(e));
     assert.equal(chunks2.filter(c => c.choices[0].text).length, 1);
   });
@@ -112,7 +117,7 @@ test('a prefix the client already wrote is not repeated: chat assistant message,
     assert.deepEqual(resumed.slice(0, 3), [' of', ' the', ' chest,'], 'picks up after the assistant prefix');
     const forked = await first({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }, { role: 'assistant', content: ' an MRI' }] });
     assert.deepEqual(forked.slice(0, 2), [' a', ' CT'], 'an unrelated prefix starts the canned text from the top');
-    const legacy = await first({ model: 'openai/gpt-3.5-turbo-instruct', prompt: `${chatPrompt} a CT scan of`, logprobs: 5 }, '/completions');
+    const legacy = await first({ model: LEGACY_ID, prompt: `${chatPrompt} a CT scan of`, logprobs: 5 }, '/completions');
     assert.deepEqual(legacy.slice(0, 2), [' the', ' chest,'], 'a completion prompt ending in canned text continues it');
     const whole = ' a CT scan of the chest, which showed a small pulmonary nodule in the right upper lobe, and the team recommended follow-up imaging in three months to watch for any change.';
     const exhausted = await first({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }, { role: 'assistant', content: whole }] });
@@ -122,12 +127,45 @@ test('a prefix the client already wrote is not repeated: chat assistant message,
     // still found (last assistant message, not the trailing one) and the instruction does not steer the canned pick.
     const continued = await first({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }, { role: 'assistant', content: ' a CT scan' }, { role: 'user', content: CONTINUE_INSTRUCTION }] });
     assert.deepEqual(continued.slice(0, 3), [' of', ' the', ' chest,'], 'picks up after a non-trailing assistant prefix');
-    const question = await first({ model: 'anthropic/claude-haiku-4.5', messages: [{ role: 'user', content: 'Why is the sky blue?' }, { role: 'assistant', content: ' Good question.' }, { role: 'user', content: CONTINUE_INSTRUCTION }] });
+    const question = await first({ model: 'anthropic/claude-haiku-5.5', messages: [{ role: 'user', content: 'Why is the sky blue?' }, { role: 'assistant', content: ' Good question.' }, { role: 'user', content: CONTINUE_INSTRUCTION }] });
     assert.deepEqual(question.slice(0, 3), [' The', ' short', ' answer'], 'the continue instruction is ignored when picking the canned text');
     // A resumed stream continues the confidence cycle rather than restarting it at "green".
     const res = await post(base, '/chat/completions', { model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: chatPrompt }, { role: 'assistant', content: ' a' }], stream: true, logprobs: true, top_logprobs: 5 });
     const chunks = (await readSSE(res)).slice(0, -1).map(e => JSON.parse(e));
     assert.equal(chunks.find(c => c.choices[0].delta?.content).choices[0].logprobs.content[0].logprob, -0.6);
+  });
+});
+
+// The Worker's simulated-autocomplete request, built by the Worker's own buildUpstream so the two cannot drift apart.
+const autocompleteBody = (base, prompt, prefix = '', more = {}) =>
+  ({ ...buildUpstream({ model: getModel(AUTOCOMPLETE_MODEL), prompt, system: '', prefix, maxTokens: 50, temperature: 0.7, topLogprobs: 5, stream: true }, base).body, ...more });
+test('simulated autocomplete: continues the fragment (prefix included) without repeating it, first token unspaced like a chat model, priced as the ladder model', async () => {
+  await withMock(async (base) => {
+    const stream = async (body) => (await readSSE(await post(base, '/chat/completions', body))).slice(0, -1).map(e => JSON.parse(e));
+    const textOf = (chunks) => chunks.filter(c => c.choices[0].delta?.content).map(c => c.choices[0].delta.content);
+
+    const fresh = await stream(autocompleteBody(base, chatPrompt));
+    const tokenChunks = fresh.filter(c => c.choices[0].delta?.content);
+    assert.deepEqual(textOf(fresh).slice(0, 3), ['a', ' CT', ' scan'], 'the clinical fragment picks the clinical text; only the first token loses its space');
+    const firstTop = tokenChunks[0].choices[0].logprobs.content[0].top_logprobs.map(t => t.token);
+    assert.equal(firstTop[0], 'a');
+    assert.ok(firstTop.every(t => !/^\s/.test(t)), `first-token alternatives are unspaced too: ${firstTop.join('|')}`);
+    assert.ok(tokenChunks[1].choices[0].logprobs.content[0].top_logprobs.every(t => /^[\s,]/.test(t.token)), 'later alternatives keep their spaces');
+    const { usage } = fresh.at(-1);
+    const sent = autocompleteBody(base, chatPrompt).messages.map(m => m.content).join('\n');
+    assert.equal(usage.prompt_tokens, Math.ceil(sent.length / 4), 'the frame and examples count as prompt tokens');
+    assert.ok(Math.abs(usage.cost - estimateCost(getModel(AUTOCOMPLETE_MODEL), usage.prompt_tokens, usage.completion_tokens)) < 1e-15);
+
+    // A prefix is appended to the fragment (there is no assistant-so-far turn): it is found there and not repeated,
+    // even though the few-shot examples end in assistant messages.
+    assert.deepEqual(textOf(await stream(autocompleteBody(base, chatPrompt, ' a CT scan'))).slice(0, 3), ['of', ' the', ' chest,']);
+    assert.deepEqual(textOf(await stream(autocompleteBody(base, chatPrompt, ' an MRI'))).slice(0, 2), ['a', ' CT'], 'an unrelated prefix starts the canned text from the top');
+    assert.deepEqual(textOf(await stream(autocompleteBody(base, 'Why is the sky blue?'))).slice(0, 2), ['Good', ' question.'], 'picked from the fragment');
+
+    const whole = await (await post(base, '/chat/completions', autocompleteBody(base, chatPrompt, '', { stream: false }))).json();
+    assert.match(whole.choices[0].message.content, /^a CT scan/);
+    assert.equal(whole.choices[0].logprobs.content[0].token, 'a');
+    assert.ok(whole.choices[0].logprobs.content[0].top_logprobs.every(t => !/^\s/.test(t.token)));
   });
 });
 
@@ -149,7 +187,7 @@ test('stream:false returns one JSON completion object', async () => {
     assert.ok(j.choices[0].message.content.length > 0);
     assert.equal(j.choices[0].logprobs.content.length, j.usage.completion_tokens);
     assert.ok(j.usage.cost > 0);
-    const res2 = await post(base, '/completions', { model: 'openai/gpt-3.5-turbo-instruct', prompt: chatPrompt, stream: false });
+    const res2 = await post(base, '/completions', { model: LEGACY_ID, prompt: chatPrompt, stream: false });
     const j2 = await res2.json();
     assert.equal(j2.object, 'text_completion'); assert.ok(j2.choices[0].text.length > 0);
   });

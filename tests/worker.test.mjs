@@ -5,7 +5,8 @@ import { handle } from '../worker/src/router.js';
 import { Ledger } from '../worker/src/ledger.js';
 import { issueSession } from '../worker/src/session.js';
 import { startMock } from '../tools/mock_openrouter.mjs';
-import { getModel, estimateCost } from '../site/models.js';
+import { AUTOCOMPLETE_FRAME, AUTOCOMPLETE_EXAMPLES } from '../worker/src/openrouter.js';
+import { MODELS, AUTOCOMPLETE_MODEL, getModel, estimateCost } from '../site/models.js';
 
 function makeEnv(overrides = {}) {
   const ledger = new Ledger();
@@ -104,10 +105,44 @@ test('client disconnect mid-stream still drains upstream and records the real co
 test('generate passes auth header, url and body to upstream', async () => {
   let seen; const env = makeEnv({ fetchUpstream: async (url, init) => { seen = { url, init }; return new Response('data: [DONE]\n\n', { status: 200 }); } });
   // Every model, "completion"-style ones included, goes to /chat/completions: OpenRouter has no separate legacy route.
-  await handle(post('/api/generate', { model: 'openai/gpt-3.5-turbo-instruct', prompt: 'hi' }, { cookie: await cookie(env) }), env, ctx);
+  await handle(post('/api/generate', { model: AUTOCOMPLETE_MODEL, prompt: 'hi' }, { cookie: await cookie(env) }), env, ctx);
   assert.equal(seen.url, 'https://up/api/v1/chat/completions');
   assert.equal(seen.init.headers.Authorization, 'Bearer k');
-  assert.deepEqual(JSON.parse(seen.init.body).messages, [{ role: 'user', content: 'hi' }]);
+  const sent = JSON.parse(seen.init.body);
+  assert.deepEqual(sent.messages, [
+    { role: 'system', content: AUTOCOMPLETE_FRAME },
+    ...AUTOCOMPLETE_EXAMPLES.flatMap(([fragment, next]) => [{ role: 'user', content: fragment }, { role: 'assistant', content: next }]),
+    { role: 'user', content: 'hi' },
+  ]);
+  assert.deepEqual(sent.provider, { require_parameters: true }, 'per-model routing reaches the wire');
+});
+
+// The completion model is a chat model framed to continue text, and chat replies start without a space. The router asks
+// for one back only when the text being continued ends in a non-space, and only for that model.
+test('router restores the leading space only for the completion model when prompt + prefix ends in a word or closing punctuation', async () => {
+  const upstream = 'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n'
+    + 'data: {"choices":[{"delta":{"content":"found"}}]}\n\ndata: {"choices":[{"delta":{"content":" it"}}]}\n\ndata: [DONE]\n\n';
+  const env = makeEnv({ fetchUpstream: async () => new Response(upstream, { status: 200, headers: { 'content-type': 'text/event-stream' } }) });
+  const c = await cookie(env);
+  const firstTwo = async (body) => {
+    const r = await handle(post('/api/generate', { stream: false, ...body }, { cookie: c }), env, ctx);
+    assert.equal(r.status, 200, JSON.stringify(body));
+    return (await r.json()).events.filter(e => e.type === 'token').map(e => e.text);
+  };
+  const cases = [
+    [{ model: AUTOCOMPLETE_MODEL, prompt: 'The nurse' }, [' found', ' it']],
+    [{ model: AUTOCOMPLETE_MODEL, prompt: 'The nurse ' }, ['found', ' it']],
+    [{ model: AUTOCOMPLETE_MODEL, prompt: 'The nurse', prefix: ' checked' }, [' found', ' it']],
+    [{ model: AUTOCOMPLETE_MODEL, prompt: 'The nurse', prefix: ' checked\n' }, ['found', ' it']],
+    [{ model: AUTOCOMPLETE_MODEL, prompt: 'The nurse ', prefix: 'checked' }, [' found', ' it'], 'the prefix decides, not the prompt'],
+    [{ model: AUTOCOMPLETE_MODEL, prompt: 'The nurse', system: 'Notes. ' }, [' found', ' it'], 'the system text comes before the prompt, so it does not count'],
+    [{ model: AUTOCOMPLETE_MODEL, prompt: 'BP was 150/' }, ['found', ' it'], 'no space after an opening character'],
+    [{ model: AUTOCOMPLETE_MODEL, prompt: 'a follow-' }, ['found', ' it'], 'no space after a hyphen'],
+    [{ model: AUTOCOMPLETE_MODEL, prompt: 'He was stable.' }, [' found', ' it'], 'a space after closing punctuation'],
+    [{ model: 'openai/gpt-4o-mini', prompt: 'The nurse' }, ['found', ' it']],
+    [{ model: 'meta-llama/llama-3.3-70b-instruct', prompt: 'The nurse', prefix: ' checked' }, ['found', ' it']],
+  ];
+  for (const [body, expected, why] of cases) assert.deepEqual(await firstTwo(body), expected, why || JSON.stringify(body));
 });
 test('invalid body → 400 with plain message', async () => {
   const env = makeEnv();
@@ -189,7 +224,8 @@ test('stream:false returns collected events as JSON, but still streams from upst
 test('GET /api/models returns the ladder; other paths fall through to assets', async () => {
   const env = makeEnv();
   const m = await (await handle(new Request('https://x/api/models'), env, ctx)).json();
-  assert.equal(m.length, 8);
+  assert.equal(m.length, 10);
+  assert.deepEqual(m.map(x => x.id), MODELS.map(x => x.id));
   assert.equal(await (await handle(new Request('https://x/index.html'), env, ctx)).text(), 'asset');
 });
 test('GET /api/session → 401 without a valid cookie, 204 with one', async () => {
@@ -247,8 +283,9 @@ test('end to end: Worker streams normalized events from the mock for chat and co
   const server = await startMock(0, { tokenMs: 1 });
   try {
     const base = `http://127.0.0.1:${server.address().port}`;
-    for (const modelId of ['openai/gpt-4o-mini', 'openai/gpt-3.5-turbo-instruct']) {
-      const env = makeEnv({ fetchUpstream: fetch, OPENROUTER_BASE_URL: base });
+    for (const modelId of ['openai/gpt-4o-mini', AUTOCOMPLETE_MODEL]) {
+      let sent;
+      const env = makeEnv({ fetchUpstream: (u, init) => { sent = JSON.parse(init.body); return fetch(u, init); }, OPENROUTER_BASE_URL: base });
       const prompt = 'The patient presented with';
       const r = await handle(post('/api/generate', { model: modelId, prompt }, { cookie: await cookie(env) }), env, ctx);
       assert.equal(r.status, 200, modelId);
@@ -256,17 +293,29 @@ test('end to end: Worker streams normalized events from the mock for chat and co
       const tokens = events.filter(e => e.type === 'token');
       assert.ok(tokens.length >= 10 && tokens.length <= 20, `${modelId}: 10–20 tokens, got ${tokens.length}`);
       assert.equal(tokens[0].top.length, 5, `${modelId}: five alternatives on the first token`);
+      // The mock unspaces the first token of a simulated-autocomplete reply, as a real chat model does; the Worker puts the
+      // space back so the continuation does not glue onto "with". A plain chat reply arrives spaced and is left alone.
+      assert.equal(tokens[0].text, ' a', `${modelId}: first token`);
+      assert.ok(tokens[0].top.every(t => /^[\s,]/.test(t.text)), `${modelId}: first-token alternatives ${tokens[0].top.map(t => t.text).join('|')}`);
       const done = events.at(-1);
       assert.equal(done.type, 'done');
       // Coupled to the mock's pricing rule on purpose: tools/mock_openrouter.mjs sets usage.prompt_tokens to
-      // ceil(promptChars / 4), completion_tokens to the number of streamed tokens, and usage.cost to
-      // estimateCost(model, ...) from site/models.js. Recomputing it here (instead of trusting a cost read back from
-      // the stream) proves the Worker passed the upstream cost through untouched and charged exactly that amount.
-      // If the mock's formula changes, update this line with it.
-      const expected = estimateCost(getModel(modelId), Math.ceil(prompt.length / 4), tokens.length);
+      // ceil(promptChars / 4) over every message sent (the autocomplete frame and examples included), completion_tokens
+      // to the number of streamed tokens, and usage.cost to estimateCost(model, ...) from site/models.js. Recomputing it
+      // here (instead of trusting a cost read back from the stream) proves the Worker passed the upstream cost through
+      // untouched and charged exactly that amount. If the mock's formula changes, update this line with it.
+      const promptChars = sent.messages.map(m => m.content).join('\n').length;
+      if (modelId === 'openai/gpt-4o-mini') assert.equal(promptChars, prompt.length);
+      const expected = estimateCost(getModel(modelId), Math.ceil(promptChars / 4), tokens.length);
       assert.ok(Math.abs(done.cost - expected) < 1e-15, `${modelId}: done.cost ${done.cost} vs mock ${expected}`);
       assert.ok(Math.abs(net(env._charges, getModel(modelId).bucket) - expected) < 1e-15, `${modelId}: net charges equal the mock's cost`);
     }
+    // Text that already ends in a space gets no second one, and a resumed run continues the canned text without repeating it.
+    const env = makeEnv({ fetchUpstream: fetch, OPENROUTER_BASE_URL: base });
+    const run = async (body) => (await (await handle(post('/api/generate', { model: AUTOCOMPLETE_MODEL, stream: false, ...body }, { cookie: await cookie(env) }), env, ctx)).json())
+      .events.filter(e => e.type === 'token').map(e => e.text);
+    assert.deepEqual((await run({ prompt: 'The patient presented with ' })).slice(0, 2), ['a', ' CT']);
+    assert.deepEqual((await run({ prompt: 'The patient presented with', prefix: ' a CT scan' })).slice(0, 3), [' of', ' the', ' chest,']);
   } finally {
     server.closeAllConnections?.();
     await new Promise(r => server.close(r));

@@ -10,10 +10,12 @@ Replace `PASSCODE` before publishing. Plain text below; paste into the Canvas pa
 This week's tool is a small website that shows what happens between the moment you type a
 prompt and the moment a model answers. You type one short sentence and watch it move through
 six stages: tokens, numbers, attention, next-token probabilities, autocomplete versus
-assistant behavior, and a side-by-side comparison of models from 2022 to today. The models
-are real (GPT-3.5, GPT-4, GPT-4o mini, Claude Haiku, GPT-5 mini, Gemini Flash Lite, and
-Llama 3.3). The class shares one daily budget, so please do the exercises and then explore
-within reason.
+assistant behavior, and a side-by-side comparison of models from 2023 to today. The models
+are real (GPT-3.5, GPT-4, GPT-4o mini, GPT-5 nano, GPT-6 Luna, Claude Haiku 5.5, Gemini 3.5
+Flash Lite, Llama 3.3, and Gemma 4). The autocomplete pane in chapter 5 is a simulation: the
+original autocomplete-only models have been retired, so a small modern model (Llama 3.1 8B)
+is told to continue your text the way they did. The class shares one daily budget, so please
+do the exercises and then explore within reason.
 
 **Link:** https://llm-under-the-hood.smcgrath.workers.dev
 
@@ -31,16 +33,17 @@ fictional and safe to use.
    or "levothyroxine") and note how many tokens it becomes. Try a common English word of the
    same length for comparison. Why might a model handle drug names worse than everyday words?
 
-2. **Fork a sentence.** In chapter 4, pick GPT-3.5 Instruct or GPT-4o mini (both show their
+2. **Fork a sentence.** In chapter 4, pick GPT-3.5 or GPT-4o mini (both show their
    probabilities), run the default prompt, then click a token in the output and pick a
    different alternative. Do this three times from the same step, so you get three
    different sentences. In two sentences, describe how the meaning changed and how confident
    the model was in each choice (the percentages next to each alternative).
 
-3. **Who invents a paper?** In chapter 6, pick GPT-3.5, Claude Haiku, and Llama 3.3, and use
-   the prompt "Cite one peer-reviewed paper showing aspirin prevents migraines." Read the
-   three answers. Which models produced a citation, and does that paper exist? (Check one in
-   PubMed or Google Scholar.) Note which model, if any, declined or hedged.
+3. **Who invents a paper?** In chapter 6, pick GPT-3.5, Claude Haiku 5.5, and Llama 3.3 (the
+   page starts with these three selected), and use the prompt "Cite one peer-reviewed paper
+   showing aspirin prevents migraines." Read the three answers. Which models produced a
+   citation, and does that paper exist? (Check one in PubMed or Google Scholar.) Note which
+   model, if any, declined or hedged.
 
 ### What to submit
 

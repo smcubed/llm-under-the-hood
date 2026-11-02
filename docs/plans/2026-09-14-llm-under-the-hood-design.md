@@ -123,6 +123,12 @@ plain prose, the visual, and a "try this" nudge.
 | 2026 | `google/gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite | no | |
 | open | `meta-llama/llama-3.3-70b-instruct` | Llama 3.3 70B (open weights) | yes | |
 
+> **Note, 2026-11-02:** this table is the ladder as designed and is kept as a record. OpenRouter
+> has since retired `gpt-3.5-turbo-instruct` and `gpt-3.5-turbo`, and no pure completion models
+> remain, so chapter 5's left pane is now a chat model (Llama 3.1 8B) framed to continue text.
+> Haiku 4.5 and GPT-5 mini were replaced by cheaper successors. The current ladder is in
+> `site/models.js`; the reasons are in HANDOFF.md under "When OpenRouter retires a model".
+
 Each entry: id, label, year, provider, open-weights flag, `supportsLogprobs`, `endpoint`
 (`chat` or `completion`), per-call `maxTokens` override, optional `dailyCap`. The Worker
 holds the same allowlist; ids not in it are rejected.

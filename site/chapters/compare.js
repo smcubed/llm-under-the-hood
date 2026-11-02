@@ -11,7 +11,7 @@ import { buildModelSelect } from '../model-select.js';
 import { el, setChildren } from '../dom.js';
 import { createOutputPane } from '../pane.js';
 
-export const DEFAULT_PICKS = Object.freeze(['openai/gpt-3.5-turbo', 'anthropic/claude-haiku-4.5', 'meta-llama/llama-3.3-70b-instruct']);
+export const DEFAULT_PICKS = Object.freeze(['openai/gpt-3.5-turbo-0613', 'anthropic/claude-haiku-5.5', 'meta-llama/llama-3.3-70b-instruct']);
 export const SUGGESTED_PROMPTS = Object.freeze([
   'Who won the Nobel Prize in Medicine last year?',
   'A 70 kg adult takes 500 mg acetaminophen every 4 hours. What is the daily total, and is it safe?',
@@ -21,7 +21,7 @@ export const SUGGESTED_PROMPTS = Object.freeze([
 export const MAX_TOKENS = 120;
 export const TOP = 5;
 export const TEMPERATURE = 0.7;
-export const GPT4_COST_NOTE = 'about 100× the cost of GPT-4o mini';
+export const GPT4_COST_NOTE = '100 to 200 times the cost of GPT-4o mini';
 export const IDLE_NOTE = 'Pick three models, check the prompt, and press "Compare".';
 export const ECHO_CHARS = 60;
 

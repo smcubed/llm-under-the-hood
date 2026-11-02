@@ -7,7 +7,7 @@ import { sse, tok, doneEvent, hanging, installScriptedFetch } from './helpers/sc
 import { mountViz } from './helpers/mount-viz.mjs';
 import { createStore } from '../site/store.js';
 import { closePopover } from '../site/popover.js';
-import { MODELS } from '../site/models.js';
+import { MODELS, AUTOCOMPLETE_MODEL } from '../site/models.js';
 import { mount, systemEchoText, DEFAULT_PICKS, SUGGESTED_PROMPTS, GPT4_COST_NOTE } from '../site/chapters/compare.js';
 
 test('systemEchoText echoes none or the first 60 characters', () => {
@@ -19,7 +19,8 @@ test('systemEchoText echoes none or the first 60 characters', () => {
 });
 
 test('the plan\'s defaults and suggested prompts', () => {
-  assert.deepEqual([...DEFAULT_PICKS], ['openai/gpt-3.5-turbo', 'anthropic/claude-haiku-4.5', 'meta-llama/llama-3.3-70b-instruct']);
+  assert.deepEqual([...DEFAULT_PICKS], ['openai/gpt-3.5-turbo-0613', 'anthropic/claude-haiku-5.5', 'meta-llama/llama-3.3-70b-instruct']);
+  assert.equal(GPT4_COST_NOTE, '100 to 200 times the cost of GPT-4o mini');
   assert.equal(SUGGESTED_PROMPTS.length, 4);
   assert.equal(SUGGESTED_PROMPTS[3], "What is today's date?");
 });
@@ -52,11 +53,12 @@ test('pickers, prompt prefill, suggested chips and the system echo before any ru
   assert.equal(selects().length, 3);
   assert.deepEqual(selects().map(s => s.value), [...DEFAULT_PICKS]);
   const groups = selects()[0].querySelectorAll('optgroup');
-  assert.deepEqual(groups.map(g => g.attributes.label), ['Early (2022–2023)', 'Recent (2024)', 'Current (2025–2026)', 'Open weights']);
-  assert.equal(selects()[0].querySelectorAll('option').length, MODELS.length);
+  assert.deepEqual(groups.map(g => g.attributes.label), ['Early (2023)', 'Recent (2024)', 'Current (2025–2026)', 'Open weights']);
+  assert.equal(selects()[0].querySelectorAll('option').length, MODELS.length - 1, 'every model but the chapter 5 autocomplete one');
+  assert.equal(selects()[0].querySelectorAll('option').some(o => o.attributes.value === AUTOCOMPLETE_MODEL), false);
   assert.equal(q('.panes').hidden, true);
   assert.equal(calls.length, 0);
-  assert.equal(panes()[1].querySelector('.pane-title').textContent, 'Claude Haiku 4.5 (2025)', 'headers reflect the picks before a run');
+  assert.equal(panes()[1].querySelector('.pane-title').textContent, 'Claude Haiku 5.5 (2026)', 'headers reflect the picks before a run');
   assert.equal(panes()[2].querySelector('.badge-open').textContent, 'open weights');
   assert.equal(panes()[0].querySelector('.badge-open'), null);
   assert.equal(panes()[0].querySelector('.badge-year').textContent, '2023');
@@ -90,8 +92,8 @@ test('pickers, prompt prefill, suggested chips and the system echo before any ru
 
 test('Compare streams three panes at once with the shared system prompt; alternatives popover on probability chips; footers; nothing published', async () => {
   const { store, q, panes, status, chipsIn, button, forModel } = mountChapter({ system: 'Be brief.' });
-  script('openai/gpt-3.5-turbo', sse([tok(' Canberra', -0.2, [{ text: ' Canberra', logprob: -0.2 }, { text: ' Sydney', logprob: -1.8 }]), done()]));
-  script('anthropic/claude-haiku-4.5', sse([tok(' Canberra', null, null), tok('.', null, null), done()]));
+  script('openai/gpt-3.5-turbo-0613', sse([tok(' Canberra', -0.2, [{ text: ' Canberra', logprob: -0.2 }, { text: ' Sydney', logprob: -1.8 }]), done()]));
+  script('anthropic/claude-haiku-5.5', sse([tok(' Canberra', null, null), tok('.', null, null), done()]));
   script('meta-llama/llama-3.3-70b-instruct', sse([tok(' Sydney', -1.9, [{ text: ' Canberra', logprob: -0.3 }, { text: ' Sydney', logprob: -1.9 }]), done('length')]));
   button('Compare').dispatch('click');
   assert.equal(q('.panes').hidden, false);
@@ -128,8 +130,8 @@ test('Compare streams three panes at once with the shared system prompt; alterna
 test('Stop all marks streaming panes stopped; changing a picker shows the GPT-4 cost badge and clears that pane; errors stay in their pane', async (t) => {
   t.mock.method(console, 'error', () => {});
   const { q, selects, panes, status, chipsIn, button, forModel } = mountChapter();
-  script('openai/gpt-3.5-turbo', hanging([tok(' Can', -0.2, null)]));
-  script('anthropic/claude-haiku-4.5', sse([tok(' Canberra', null, null), done()]));
+  script('openai/gpt-3.5-turbo-0613', hanging([tok(' Can', -0.2, null)]));
+  script('anthropic/claude-haiku-5.5', sse([tok(' Canberra', null, null), done()]));
   script('meta-llama/llama-3.3-70b-instruct', hanging([tok(' Syd', -1.9, null)]));
   button('Compare').dispatch('click');
   await waitFor(() => chipsIn(panes()[0]).length === 1 && chipsIn(panes()[2]).length === 1 && status(panes()[1]) === 'Finished (stop)');
@@ -146,11 +148,11 @@ test('Stop all marks streaming panes stopped; changing a picker shows the GPT-4 
   assert.doesNotMatch(pane.querySelector('.pane-head').textContent, /null/);
   assert.equal(pane.querySelector('.pane-cost-note').hidden, false);
   assert.equal(pane.querySelector('.pane-cost-note').textContent, GPT4_COST_NOTE);
-  assert.equal(pane.querySelector('.pane-blurb').textContent, 'The first frontier model. Still expensive: about 100× the price of GPT-4o mini.');
+  assert.equal(pane.querySelector('.pane-blurb').textContent, 'The 2023 frontier model. Still expensive: 100 to 200 times the price of GPT-4o mini.');
   assert.equal(chipsIn(pane).length, 0, 'output from the previous model is cleared');
   assert.equal(status(pane), '');
 
-  script('openai/gpt-3.5-turbo', sse([tok(' Canberra', -0.2, null), done()]));
+  script('openai/gpt-3.5-turbo-0613', sse([tok(' Canberra', -0.2, null), done()]));
   script('openai/gpt-4', new Response(JSON.stringify({ message: "Today's GPT-4 budget is used up." }), { status: 429 }));
   script('meta-llama/llama-3.3-70b-instruct', sse([tok(' Canberra', -0.3, null), done()]));
   button('Compare').dispatch('click');

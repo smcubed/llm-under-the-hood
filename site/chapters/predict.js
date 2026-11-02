@@ -19,7 +19,7 @@ import { createOutputPane, joinTokens, forkAt, STEP_TOP, CONSIDERED_IDLE } from 
 
 export const HEADING = "The model's top guesses for the next token";
 export const HALLUCINATION_CAPTION = 'Notice the red tokens read just as smoothly as the green ones. That is what a hallucination looks like from the inside.';
-export const COMPLETION_NOTE = 'This model just continues the text.';
+export const COMPLETION_NOTE = 'This model is set up to just continue the text, like early autocomplete models.';
 export const IDLE_NOTE = 'Press "Run it" above and the model\'s guesses for the next token appear here.';
 export const CONTINUE_TOKENS = 120;
 export const DEFAULT_TEMPERATURE = 0.7;

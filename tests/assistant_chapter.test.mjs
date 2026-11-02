@@ -10,8 +10,8 @@ import { closePopover } from '../site/popover.js';
 import { AUTOCOMPLETE_MODEL, DEFAULT_MODEL } from '../site/models.js';
 import { mount, pickAssistantModel, firstGuessesText, presetFor, SYSTEM_PRESETS, LEFT_LABEL, LEFT_CAPTION, RIGHT_CAPTION } from '../site/chapters/assistant.js';
 
-test('pickAssistantModel falls back to the default for the instruct model and unknown ids', () => {
-  assert.equal(pickAssistantModel('anthropic/claude-haiku-4.5'), 'anthropic/claude-haiku-4.5');
+test('pickAssistantModel falls back to the default for the autocomplete model and unknown ids', () => {
+  assert.equal(pickAssistantModel('anthropic/claude-haiku-5.5'), 'anthropic/claude-haiku-5.5');
   assert.equal(pickAssistantModel(AUTOCOMPLETE_MODEL), DEFAULT_MODEL);
   assert.equal(pickAssistantModel('nope/x'), DEFAULT_MODEL);
   assert.equal(pickAssistantModel(undefined), DEFAULT_MODEL);
@@ -46,7 +46,7 @@ afterEach(() => { closePopover(); fetchStub.restore(); dom.restore(); });
 
 function mountChapter(state = {}) {
   const { root, viz, q, button } = mountViz(dom);
-  const store = createStore({ prompt: 'What is the first-line treatment for hypertension?', modelId: 'anthropic/claude-haiku-4.5', system: '', runId: 0, results: {}, ...state });
+  const store = createStore({ prompt: 'What is the first-line treatment for hypertension?', modelId: 'anthropic/claude-haiku-5.5', system: '', runId: 0, results: {}, ...state });
   mount(root, store);
   const panes = () => viz.querySelectorAll('.pane');
   const chipsIn = (pane) => pane.querySelectorAll('.out-chips .chip').map(c => c.textContent);
@@ -64,23 +64,23 @@ test('a run streams both panes with the shared parameters, shows captions, first
   assert.equal(calls.length, 0);
 
   script(AUTOCOMPLETE_MODEL, sse([tok(' and', -0.3, [{ text: ' and', logprob: -0.3 }, { text: ' in', logprob: -1.5 }, { text: ' for', logprob: -2 }, { text: ' with', logprob: -3 }]), tok(' how', -1.5, null), done('length')]));
-  script('anthropic/claude-haiku-4.5', sse([tok(' A', null, null), tok(' thiazide', null, null), done()]));
+  script('anthropic/claude-haiku-5.5', sse([tok(' A', null, null), tok(' thiazide', null, null), done()]));
   store.set({ runId: 1 });
   assert.equal(q('.panes').hidden, false);
   await waitFor(() => panes().every(p => p.querySelector('.status').textContent.startsWith('Finished') || p.querySelector('.status').textContent.startsWith('Cut off')));
 
   assert.equal(calls.length, 2);
-  const left = forModel(AUTOCOMPLETE_MODEL)[0].body, right = forModel('anthropic/claude-haiku-4.5')[0].body;
+  const left = forModel(AUTOCOMPLETE_MODEL)[0].body, right = forModel('anthropic/claude-haiku-5.5')[0].body;
   const expected = { prompt: 'What is the first-line treatment for hypertension?', system: '', prefix: '', maxTokens: 80, temperature: 0.7, topLogprobs: 3, stream: true };
   assert.deepEqual(left, { model: AUTOCOMPLETE_MODEL, ...expected });
-  assert.deepEqual(right, { model: 'anthropic/claude-haiku-4.5', ...expected });
+  assert.deepEqual(right, { model: 'anthropic/claude-haiku-5.5', ...expected });
 
   const [lp, rp] = panes();
   assert.equal(lp.querySelector('.pane-title').textContent, LEFT_LABEL);
   assert.equal(lp.querySelector('.pane-caption').textContent, LEFT_CAPTION);
-  assert.equal(rp.querySelector('.pane-title').textContent, 'Claude Haiku 4.5 (2025)');
+  assert.equal(rp.querySelector('.pane-title').textContent, 'Claude Haiku 5.5 (2026)');
   assert.equal(rp.querySelector('.pane-caption').textContent, RIGHT_CAPTION);
-  assert.ok(lp.querySelector('.out-line').classList.contains('is-completion'), 'the instruct pane flows prompt into continuation');
+  assert.ok(lp.querySelector('.out-line').classList.contains('is-completion'), 'the autocomplete pane flows prompt into continuation');
   assert.equal(lp.querySelector('.out-prompt').textContent, 'What is the first-line treatment for hypertension?');
   assert.deepEqual(chipsIn(lp), ['␣and', '␣how']);
   assert.deepEqual(chipsIn(rp), ['␣A', '␣thiazide']);
@@ -94,11 +94,11 @@ test('a run streams both panes with the shared parameters, shows captions, first
   assert.match(rp.querySelector('.foot-latency').textContent, /ms|s$/);
   assert.equal(lp.querySelector('.status').textContent, 'Cut off at the token limit');
   assert.equal(rp.querySelector('.status').textContent, 'Finished (stop)');
-  assert.deepEqual(store.get().results.assistant, { runId: 1, left: AUTOCOMPLETE_MODEL, right: 'anthropic/claude-haiku-4.5' });
+  assert.deepEqual(store.get().results.assistant, { runId: 1, left: AUTOCOMPLETE_MODEL, right: 'anthropic/claude-haiku-5.5' });
   assert.equal(button('Run both again').disabled, false);
 });
 
-test('the right pane uses the default model when the chosen model is the instruct model', async () => {
+test('the right pane uses the default model when the chosen model is the autocomplete model', async () => {
   const { store, panes, forModel } = mountChapter({ modelId: AUTOCOMPLETE_MODEL });
   script(AUTOCOMPLETE_MODEL, sse([tok(' x', -0.1, null), done()]));
   script(DEFAULT_MODEL, sse([tok(' y', -0.1, null), done()]));
@@ -112,7 +112,7 @@ test('presets and the custom field write store.system; "Run both again" re-runs 
   const { store, q, radio, button, panes, chipsIn, forModel } = mountChapter();
   const NURSE = SYSTEM_PRESETS[1].text;
   script(AUTOCOMPLETE_MODEL, hanging([tok(' and', -0.3, null)]));
-  script('anthropic/claude-haiku-4.5', hanging([tok(' A', null, null)]));
+  script('anthropic/claude-haiku-5.5', hanging([tok(' A', null, null)]));
   store.set({ runId: 1 });
   await waitFor(() => panes().every(p => p.querySelectorAll('.out-chips .chip').length === 1));
 
@@ -121,13 +121,13 @@ test('presets and the custom field write store.system; "Run both again" re-runs 
   assert.equal(q('.system-custom').hidden, true);
 
   script(AUTOCOMPLETE_MODEL, sse([tok(' Blood', -0.2, null), done()]));
-  script('anthropic/claude-haiku-4.5', sse([tok(' Doctors', null, null), done()]));
+  script('anthropic/claude-haiku-5.5', sse([tok(' Doctors', null, null), done()]));
   button('Run both again').dispatch('click');
   assert.equal(store.get().runId, 1, 'a local re-run does not bump the global runId');
   await waitFor(() => panes().every(p => p.querySelector('.status').textContent === 'Finished (stop)'));
   assert.equal(calls.length, 4);
   assert.equal(forModel(AUTOCOMPLETE_MODEL)[1].body.system, NURSE);
-  assert.equal(forModel('anthropic/claude-haiku-4.5')[1].body.system, NURSE);
+  assert.equal(forModel('anthropic/claude-haiku-5.5')[1].body.system, NURSE);
   assert.deepEqual(chipsIn(panes()[0]), ['␣Blood'], 'the earlier hanging stream was aborted and its tokens cleared');
   assert.deepEqual(chipsIn(panes()[1]), ['␣Doctors']);
 
@@ -152,7 +152,7 @@ test('a chapter mounted with a custom system text pre-selects Custom; per-pane e
   assert.equal(q('.system-custom').hidden, false);
 
   script(AUTOCOMPLETE_MODEL, new Response(JSON.stringify({ message: 'The class budget for today is used up.' }), { status: 429 }));
-  script('anthropic/claude-haiku-4.5', sse([tok(' Oui', null, null), done()]));
+  script('anthropic/claude-haiku-5.5', sse([tok(' Oui', null, null), done()]));
   store.set({ runId: 1 });
   await waitFor(() => panes()[0].querySelector('.notice') && panes()[1].querySelector('.status').textContent === 'Finished (stop)');
   assert.equal(panes()[0].querySelector('.notice').children[0].textContent, 'The class budget for today is used up.');

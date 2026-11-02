@@ -90,7 +90,9 @@ export async function handle(request, env, ctx) {
       return json(502, { message: `The model provider returned an error (${up.status}). Try again or pick another model.` }, headers);
     }
 
-    const events = normalizeUpstream(up.body, model, { promptChars });
+    // Only after a word or closing punctuation: '150/' or 'follow-' should continue without a space.
+    const leadSpace = model.endpoint === 'completion' && /[\p{L}\p{N}.,;:!?)\]}'"’”]$/u.test(v.value.prompt + v.value.prefix);
+    const events = normalizeUpstream(up.body, model, { promptChars, leadSpace });
     const reconcile = async (cost) => {
       try { await ledger.charge(model.bucket, cost - reserved); }
       catch (err) { console.error('generate: reconciling spend failed; reservation stands', err?.message || err); }

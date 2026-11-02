@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { buildUpstream, normalizeUpstream, parseSSE, CONTINUE_INSTRUCTION, readExcerpt } from '../worker/src/openrouter.js';
-import { getModel } from '../site/models.js';
+import { buildUpstream, normalizeUpstream, parseSSE, CONTINUE_INSTRUCTION, AUTOCOMPLETE_FRAME, AUTOCOMPLETE_EXAMPLES, readExcerpt } from '../worker/src/openrouter.js';
+import { getModel, AUTOCOMPLETE_MODEL } from '../site/models.js';
 
 const fx = (n) => readFile(new URL(`./fixtures/${n}`, import.meta.url), 'utf8');
 const base = { prompt: 'The patient presented with', system: '', prefix: '', maxTokens: 50, temperature: 0.7, topLogprobs: 5, stream: true };
@@ -20,7 +20,7 @@ test('buildUpstream: chat model → /chat/completions with messages, logprobs, u
 test('buildUpstream: always asks upstream to stream, even when the client asked for stream:false', () => {
   const v = { ...base, model: getModel('openai/gpt-4o-mini'), stream: false };
   assert.equal(buildUpstream(v, 'x').body.stream, true);
-  const c = { ...base, model: getModel('openai/gpt-3.5-turbo-instruct'), stream: false };
+  const c = { ...base, model: getModel(AUTOCOMPLETE_MODEL), stream: false };
   assert.equal(buildUpstream(c, 'x').body.stream, true);
 });
 test('buildUpstream: system and prefix become system + assistant-so-far + an explicit continue instruction', () => {
@@ -35,36 +35,75 @@ test('buildUpstream: system and prefix become system + assistant-so-far + an exp
   assert.equal(body.messages.length, 4);
 });
 test('buildUpstream: chat prefix without a system prompt is user, assistant, continue; no prefix means no continue message', () => {
-  const { body } = buildUpstream({ ...base, model: getModel('anthropic/claude-haiku-4.5'), prefix: ' A CT' }, 'x');
+  const { body } = buildUpstream({ ...base, model: getModel('anthropic/claude-haiku-5.5'), prefix: ' A CT' }, 'x');
   assert.deepEqual(body.messages.map(m => m.role), ['user', 'assistant', 'user']);
   assert.equal(body.messages.at(-1).content, CONTINUE_INSTRUCTION);
   assert.match(CONTINUE_INSTRUCTION, /continue/i);
-  const plain = buildUpstream({ ...base, model: getModel('anthropic/claude-haiku-4.5') }, 'x').body;
+  const plain = buildUpstream({ ...base, model: getModel('anthropic/claude-haiku-5.5') }, 'x').body;
   assert.deepEqual(plain.messages.map(m => m.role), ['user']);
 });
-test('buildUpstream: per-model upstream params drop omitted keys and merge extras (gpt-5-mini)', () => {
-  const { body } = buildUpstream({ ...base, model: getModel('openai/gpt-5-mini'), topLogprobs: 0 }, 'x');
-  assert.equal('temperature' in body, false);
-  assert.equal(body.reasoning?.effort, 'minimal');
-  assert.equal(body.max_tokens, 50); assert.equal(body.stream, true); assert.equal(body.model, 'openai/gpt-5-mini');
+test('buildUpstream: per-model upstream params drop omitted keys and merge extras (reasoning models)', () => {
+  for (const id of ['openai/gpt-5-nano', 'openai/gpt-6-luna']) {
+    const { body } = buildUpstream({ ...base, model: getModel(id), topLogprobs: 0 }, 'x');
+    assert.equal('temperature' in body, false, id);
+    assert.equal(body.reasoning?.effort, 'minimal', id);
+    assert.equal(body.max_tokens, 50); assert.equal(body.stream, true); assert.equal(body.model, id);
+  }
+  // Omit without extras: Haiku drops temperature and gains nothing.
+  const haiku = buildUpstream({ ...base, model: getModel('anthropic/claude-haiku-5.5'), topLogprobs: 0 }, 'x').body;
+  assert.equal('temperature' in haiku, false); assert.equal('reasoning' in haiku, false); assert.equal('provider' in haiku, false);
   // Other models are untouched.
   const other = buildUpstream({ ...base, model: getModel('openai/gpt-4o-mini') }, 'x').body;
-  assert.equal(other.temperature, 0.7); assert.equal('reasoning' in other, false);
-  const legacy = buildUpstream({ ...base, model: getModel('openai/gpt-3.5-turbo-instruct') }, 'x').body;
-  assert.equal(legacy.temperature, 0.7); assert.equal('reasoning' in legacy, false);
+  assert.equal(other.temperature, 0.7); assert.equal('reasoning' in other, false); assert.equal('provider' in other, false);
+});
+test('buildUpstream: open-weights logprobs models and the autocomplete model send provider.require_parameters, keeping temperature and logprobs', () => {
+  for (const id of ['meta-llama/llama-3.3-70b-instruct', 'google/gemma-4-26b-a4b-it', AUTOCOMPLETE_MODEL]) {
+    const { body } = buildUpstream({ ...base, model: getModel(id) }, 'x');
+    assert.deepEqual(body.provider, { require_parameters: true }, id);
+    assert.equal(body.temperature, 0.7, id); assert.equal('reasoning' in body, false, id);
+    assert.equal(body.logprobs, true, id); assert.equal(body.top_logprobs, 5, id);
+    assert.equal(body.model, id); assert.equal(body.stream, true);
+  }
 });
 test('buildUpstream: no logprobs fields for models that lack them', () => {
-  const v = { ...base, model: getModel('anthropic/claude-haiku-4.5'), topLogprobs: 0 };
+  const v = { ...base, model: getModel('anthropic/claude-haiku-5.5'), topLogprobs: 0 };
   const { body } = buildUpstream(v, 'x');
   assert.equal('logprobs' in body, false); assert.equal('top_logprobs' in body, false);
 });
-test('buildUpstream: completion model → /chat/completions too (OpenRouter has no separate legacy endpoint), one user message folding system+prompt+prefix, boolean logprobs', () => {
-  const v = { ...base, model: getModel('openai/gpt-3.5-turbo-instruct'), prefix: ' chest', system: 'Note:' };
+test('buildUpstream: completion model → /chat/completions too, as frame + few-shot pairs + one user fragment folding system+prompt+prefix, boolean logprobs', () => {
+  const v = { ...base, model: getModel(AUTOCOMPLETE_MODEL), prefix: ' chest', system: 'Note:' };
   const { url, body } = buildUpstream(v, 'https://o/api/v1');
   assert.equal(url, 'https://o/api/v1/chat/completions');
-  assert.deepEqual(body.messages, [{ role: 'user', content: 'Note:\n\nThe patient presented with chest' }]);
+  assert.deepEqual(body.messages, [
+    { role: 'system', content: AUTOCOMPLETE_FRAME },
+    ...AUTOCOMPLETE_EXAMPLES.flatMap(([fragment, next]) => [{ role: 'user', content: fragment }, { role: 'assistant', content: next }]),
+    { role: 'user', content: 'Note:\n\nThe patient presented with chest' },
+  ]);
+  assert.equal(body.messages.length, 2 + 2 * AUTOCOMPLETE_EXAMPLES.length);
+  assert.equal(body.messages.filter(m => m.role === 'system').length, 1, "the student's system prompt is text in the fragment, not a second system message");
+  assert.equal(body.messages.some(m => m.content === CONTINUE_INSTRUCTION), false, 'a prefix is appended to the fragment, not continued as a turn');
   assert.equal('prompt' in body, false);
   assert.equal(body.logprobs, true); assert.equal(body.top_logprobs, 5);
+  // Without a system prompt the fragment is just prompt + prefix.
+  assert.equal(buildUpstream({ ...base, model: getModel(AUTOCOMPLETE_MODEL) }, 'x').body.messages.at(-1).content, 'The patient presented with');
+});
+test('autocomplete frame: an instruction to continue, plus example pairs whose continuations start with a space', () => {
+  assert.match(AUTOCOMPLETE_FRAME, /continu/i);
+  assert.ok(Object.isFrozen(AUTOCOMPLETE_EXAMPLES));
+  assert.ok(AUTOCOMPLETE_EXAMPLES.length >= 2);
+  for (const [fragment, next] of AUTOCOMPLETE_EXAMPLES) {
+    assert.equal(typeof fragment, 'string'); assert.ok(fragment.length > 0);
+    assert.match(next, /^ \S/, 'continuations start with one space, as base-model tokens do');
+  }
+  assert.ok(AUTOCOMPLETE_EXAMPLES.some(([fragment]) => fragment.endsWith('?')), 'one example continues a question instead of answering it');
+});
+test('buildUpstream: the chat branch never sees the autocomplete frame', () => {
+  for (const id of ['openai/gpt-4o-mini', 'meta-llama/llama-3.3-70b-instruct']) {
+    const { body } = buildUpstream({ ...base, model: getModel(id), system: 'Note:', prefix: ' chest' }, 'x');
+    assert.deepEqual(body.messages.map(m => m.role), ['system', 'user', 'assistant', 'user'], id);
+    assert.equal(body.messages[0].content, 'Note:');
+    assert.equal(body.messages.some(m => m.content === AUTOCOMPLETE_FRAME), false, id);
+  }
 });
 
 test('parseSSE splits a buffer into data payloads and keeps the remainder', () => {
@@ -100,10 +139,10 @@ test('normalize chat with logprobs → token events with top alternatives and do
   assert.equal(ev.length, 3);
 });
 test('normalize chat without logprobs → token events with null logprob/top, estimated cost', async () => {
-  const ev = await collect('chat_plain.sse', 'anthropic/claude-haiku-4.5');
+  const ev = await collect('chat_plain.sse', 'anthropic/claude-haiku-5.5');
   assert.equal(ev[0].text, 'A CT'); assert.equal(ev[0].logprob, null); assert.equal(ev[0].top, null);
   const done = ev.at(-1);
-  assert.ok(Math.abs(done.cost - (12 * 1 + 4 * 5) / 1e6) < 1e-12);
+  assert.ok(Math.abs(done.cost - (12 * 0.1 + 4 * 0.5) / 1e6) < 1e-12);
 });
 async function collectText(text, modelId, opts) {
   const out = []; for await (const e of normalizeUpstream(new Response(text).body, getModel(modelId), opts)) out.push(e);
@@ -131,9 +170,9 @@ test('normalize: a chat chunk with delta.content and an empty logprobs.content e
   const ev = await collectText(body, 'openai/gpt-4o-mini');
   assert.deepEqual(ev.filter(e => e.type === 'token'), [{ type: 'token', text: ' CT', logprob: null, top: null }]);
 });
-test('normalize: a former "completion" model is parsed the same chat-shaped way as any other (no legacy shape exists any more)', async () => {
+test('normalize: the "completion" (simulated autocomplete) model is parsed the same chat-shaped way as any other (no legacy shape exists any more)', async () => {
   const body = 'data: {"choices":[{"text":" chest","logprobs":{"content":[{"token":" chest","logprob":-0.3,"top_logprobs":[{"token":" chest","logprob":-0.3},{"token":" CT","logprob":-1.5}]}]},"finish_reason":null}]}\n\ndata: [DONE]\n\n';
-  const ev = await collectText(body, 'openai/gpt-3.5-turbo-instruct');
+  const ev = await collectText(body, AUTOCOMPLETE_MODEL);
   assert.equal(ev[0].text, ' chest'); assert.equal(ev[0].logprob, -0.3);
   assert.deepEqual(ev[0].top, [{ text: ' chest', logprob: -0.3 }, { text: ' CT', logprob: -1.5 }]);
   assert.equal(ev.filter(e => e.type === 'token').length, 1);
@@ -142,7 +181,7 @@ test('normalize: an unparseable payload is skipped and the warning logs only its
   const orig = console.warn; const calls = [];
   console.warn = (...a) => calls.push(a.map(String).join(' '));
   try {
-    const ev = await collectText('data: {"secret":"patient-name-here"\n\ndata: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n', 'anthropic/claude-haiku-4.5');
+    const ev = await collectText('data: {"secret":"patient-name-here"\n\ndata: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n', 'anthropic/claude-haiku-5.5');
     assert.deepEqual(ev.filter(e => e.type === 'token').map(e => e.text), ['ok']);
   } finally { console.warn = orig; }
   assert.equal(calls.length, 1);
@@ -150,19 +189,61 @@ test('normalize: an unparseable payload is skipped and the warning logs only its
   assert.match(calls[0], /\b29\b/, 'reports the payload length');
 });
 
+// leadSpace: a chat model starts its reply without a space, which would glue a simulated-autocomplete continuation onto
+// the student's last word. The Worker asks normalizeUpstream to restore that space on the first token only.
+const lpChunk = (entries) => `data: ${JSON.stringify({ choices: [{ delta: { content: entries.map(e => e.token).join('') }, logprobs: { content: entries } }] })}\n\n`;
+const lpEntry = (token, logprob, alts = []) => ({ token, logprob, top_logprobs: [{ token, logprob }, ...alts] });
+const tokensOf = (ev) => ev.filter(e => e.type === 'token');
+test('normalize leadSpace: the first token and its top alternatives gain a leading space; later tokens are untouched', async () => {
+  const body = lpChunk([lpEntry('found', -0.2, [{ token: 'was', logprob: -1.1 }, { token: ',', logprob: -2 }, { token: ' had', logprob: -3 }])])
+    + lpChunk([lpEntry('it', -0.4, [{ token: 'that', logprob: -1 }])]) + 'data: [DONE]\n\n';
+  const ev = tokensOf(await collectText(body, AUTOCOMPLETE_MODEL, { leadSpace: true }));
+  assert.deepEqual(ev.map(e => e.text), [' found', 'it']);
+  assert.deepEqual(ev[0].top, [{ text: ' found', logprob: -0.2 }, { text: ' was', logprob: -1.1 }, { text: ',', logprob: -2 }, { text: ' had', logprob: -3 }],
+    'alternatives match the chosen token; punctuation and already-spaced alternatives are left alone');
+  assert.equal(ev[0].logprob, -0.2);
+  assert.deepEqual(ev[1].top, [{ text: 'it', logprob: -0.4 }, { text: 'that', logprob: -1 }]);
+});
+test('normalize leadSpace: a first token that already starts with whitespace or closing punctuation is left alone', async () => {
+  for (const first of [' found', '\nThe', '.', ',', ';', ':', '!', '?', ')', ']', '}', "'s", '"', '’s', '”', '-year']) {
+    const body = `data: {"choices":[{"delta":{"content":${JSON.stringify(first)}}}]}\n\ndata: {"choices":[{"delta":{"content":"next"}}]}\n\ndata: [DONE]\n\n`;
+    const ev = tokensOf(await collectText(body, AUTOCOMPLETE_MODEL, { leadSpace: true }));
+    assert.deepEqual(ev.map(e => e.text), [first, 'next'], JSON.stringify(first));
+  }
+});
+test('normalize leadSpace: only the first non-empty token is touched, across chunks and without logprobs', async () => {
+  // The role chunk (empty content) yields no token; an empty logprob entry stays empty and is skipped over.
+  const body = 'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n'
+    + lpChunk([lpEntry('', -0.01), lpEntry('shortness', -0.3)]) + lpChunk([lpEntry('of', -0.1)]) + 'data: [DONE]\n\n';
+  const ev = tokensOf(await collectText(body, AUTOCOMPLETE_MODEL, { leadSpace: true }));
+  assert.deepEqual(ev.map(e => e.text), ['', ' shortness', 'of']);
+  assert.deepEqual(ev[0].top, [{ text: '', logprob: -0.01 }]);
+  const plain = 'data: {"choices":[{"delta":{"content":""}}]}\n\ndata: {"choices":[{"delta":{"content":"shortness"}}]}\n\ndata: {"choices":[{"delta":{"content":"of"}}]}\n\ndata: [DONE]\n\n';
+  const pev = tokensOf(await collectText(plain, 'anthropic/claude-haiku-5.5', { leadSpace: true }));
+  assert.deepEqual(pev, [{ type: 'token', text: ' shortness', logprob: null, top: null }, { type: 'token', text: 'of', logprob: null, top: null }]);
+});
+test('normalize leadSpace is off by default and when false', async () => {
+  const body = lpChunk([lpEntry('found', -0.2, [{ token: 'was', logprob: -1.1 }])]) + 'data: [DONE]\n\n';
+  for (const opts of [undefined, {}, { leadSpace: false }, { promptChars: 30 }]) {
+    const ev = tokensOf(await collectText(body, AUTOCOMPLETE_MODEL, opts));
+    assert.equal(ev[0].text, 'found', JSON.stringify(opts));
+    assert.deepEqual(ev[0].top.map(t => t.text), ['found', 'was']);
+  }
+});
+
 // I1: no usage block → estimate from what we saw; no [DONE] → finish 'truncated'
 test('normalize estimates usage when upstream omits it and marks a stream that ended without [DONE] as truncated', async () => {
   const body = 'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: {"choices":[{"delta":{"content":" there"}}]}\n\n';
-  const ev = await collectText(body, 'anthropic/claude-haiku-4.5', { promptChars: 30 });
+  const ev = await collectText(body, 'anthropic/claude-haiku-5.5', { promptChars: 30 });
   assert.equal(ev.length, 3);
   const done = ev.at(-1);
   assert.equal(done.type, 'done');
   assert.deepEqual(done.usage, { prompt: 10, completion: 2 });
-  assert.ok(Math.abs(done.cost - (10 * 1 + 2 * 5) / 1e6) < 1e-15);
+  assert.ok(Math.abs(done.cost - (10 * 0.1 + 2 * 0.5) / 1e6) < 1e-15);
   assert.equal(done.finish, 'truncated');
 });
 test('normalize keeps the upstream finish reason when [DONE] arrives', async () => {
-  const ev = await collect('chat_plain.sse', 'anthropic/claude-haiku-4.5');
+  const ev = await collect('chat_plain.sse', 'anthropic/claude-haiku-5.5');
   assert.equal(ev.at(-1).finish, 'stop');
 });
 
@@ -170,7 +251,7 @@ test('normalize keeps the upstream finish reason when [DONE] arrives', async () 
 test('normalize processes a trailing SSE block that lacks the final blank line', async () => {
   const text = (await fx('chat_plain.sse')).replace(/\n\ndata: \[DONE\]\n\n$/, '');
   assert.ok(!text.endsWith('\n\n'), 'fixture variant should end mid-block');
-  const ev = await collectText(text, 'anthropic/claude-haiku-4.5', { promptChars: 5 });
+  const ev = await collectText(text, 'anthropic/claude-haiku-5.5', { promptChars: 5 });
   const done = ev.at(-1);
   assert.deepEqual(done.usage, { prompt: 12, completion: 4 });
   assert.equal(done.finish, 'stop');
@@ -186,12 +267,12 @@ test('normalize turns an upstream read failure into an error event followed by d
       throw new Error('socket hang up');
     },
   });
-  const out = []; for await (const e of normalizeUpstream(stream, getModel('anthropic/claude-haiku-4.5'), { promptChars: 9 })) out.push(e);
+  const out = []; for await (const e of normalizeUpstream(stream, getModel('anthropic/claude-haiku-5.5'), { promptChars: 9 })) out.push(e);
   assert.equal(out[0].type, 'token'); assert.equal(out[0].text, 'A CT');
   assert.deepEqual(out[1], { type: 'error', message: 'The connection to the model dropped.' });
   const done = out[2];
   assert.equal(done.type, 'done'); assert.deepEqual(done.usage, { prompt: 3, completion: 1 }); assert.equal(done.finish, 'truncated');
-  assert.ok(Math.abs(done.cost - (3 * 1 + 1 * 5) / 1e6) < 1e-15);
+  assert.ok(Math.abs(done.cost - (3 * 0.1 + 1 * 0.5) / 1e6) < 1e-15);
   assert.equal(out.length, 3);
 });
 
