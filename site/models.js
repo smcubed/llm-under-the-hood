@@ -36,7 +36,7 @@ export const MODELS = Object.freeze([
   { id: 'meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B (open weights, 2024)', short: 'Llama 3.3', year: 2024, provider: 'Meta', exactTokenizer: false, open: true, logprobs: true, endpoint: 'chat', tokenizer: 'o200k', bucket: 'default', price: { in: 0.135, out: 0.4 },
     upstream: LOGPROB_PROVIDERS_ONLY,
     blurb: 'Open weights: anyone can download and run it. Uses its own tokenizer, so token counts differ.' },
-  { id: 'google/gemma-4-26b-a4b-it', label: 'Gemma 4 26B (open weights, 2026)', short: 'Gemma 4', year: 2026, provider: 'Google', exactTokenizer: false, open: true, logprobs: true, endpoint: 'chat', tokenizer: 'o200k', bucket: 'default', price: { in: 0.024, out: 0.1 },
+  { id: 'google/gemma-4-26b-a4b-it', label: 'Gemma 4 26B (open weights, 2026)', short: 'Gemma 4', year: 2026, provider: 'Google', exactTokenizer: false, open: true, logprobs: true, endpoint: 'chat', tokenizer: 'o200k', bucket: 'default', price: { in: 0.08, out: 0.1 },
     upstream: LOGPROB_PROVIDERS_ONLY,
     blurb: 'A current open-weights model from Google, small enough to run on one good graphics card. Shares its probabilities.' },
   // Chapter 5's left pane only (`picker: false`): the Worker's frame and leading-space repair assume a fresh run from the
